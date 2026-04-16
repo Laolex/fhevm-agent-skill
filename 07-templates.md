@@ -234,7 +234,7 @@ Full overcollateralized lending protocol with multi-asset cross-collateral, cred
 
 **Deployed:** Sepolia `0xFC0f1744d3cF752Bdd67c0BA4b0CaD4048f7376A` (ConfidentialLending)
 **Companion:** `ConfidentialCreditScore` — stores `euint64` score, exposes `hasScore()` + `meetsThreshold()`
-**Source:** `/home/laolex/Projects/shieldlend/contracts/`
+**Source:** [github.com/Laolex/shieldlend](https://github.com/Laolex/shieldlend)
 
 ---
 

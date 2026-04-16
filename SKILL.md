@@ -20,9 +20,9 @@ When this skill is invoked, check the args/command first and route accordingly:
 
 | If args or user said… | Action |
 |-----------------------|--------|
-| `scaffold` / `/fhevm scaffold` / "generate a contract" / "build a new fhevm contract" | Read `/home/laolex/.claude/skills/fhevm/scaffold.md` then execute that workflow |
-| `audit` / `/fhevm audit` / "audit this contract" / "review for ACL issues" | Read `/home/laolex/.claude/skills/fhevm/audit.md` then execute that workflow |
-| `migrate` / `/fhevm migrate` / "migrate from TFHE" / "update to new FHE API" | Read `/home/laolex/.claude/skills/fhevm/migrate.md` then execute that workflow |
+| `scaffold` / `/fhevm scaffold` / "generate a contract" / "build a new fhevm contract" | Read `./scaffold.md` then execute that workflow |
+| `audit` / `/fhevm audit` / "audit this contract" / "review for ACL issues" | Read `./audit.md` then execute that workflow |
+| `migrate` / `/fhevm migrate` / "migrate from TFHE" / "update to new FHE API" | Read `./migrate.md` then execute that workflow |
 | No args / help / "what can you do" | Show the command menu below and wait for user |
 | Any other fhEVM task | Read relevant reference module(s) below, then proceed |
 
@@ -104,11 +104,11 @@ try {
 **ShieldLend** — overcollateralized lending, Sepolia
 - Contracts: `ConfidentialLending.sol` + `ConfidentialCreditScore.sol` (447 + 295 lines)
 - Patterns: multi-asset cross-collateral, score-gated tiered ratios, 3-step liquidation, 2-step close
-- Source: `/home/laolex/Projects/shieldlend/contracts/`
+- Source: [github.com/Laolex/shieldlend](https://github.com/Laolex/shieldlend)
 
 **ShieldPay v2** — FHE payroll, Sepolia
 - Contract: `ConfidentialPayroll.sol` — EMPLOYER/AUDITOR/PAYMASTER roles, FHE payroll math
-- Source: `/home/laolex/Projects/shieldpay-v2/`
+- Source: [github.com/Laolex/shieldpay](https://github.com/Laolex/shieldpay)
 
 ---
 

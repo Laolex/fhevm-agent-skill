@@ -369,7 +369,7 @@ Do NOT import @zama-fhe/relayer-sdk from npm. The SDK ships as a vendored bundle
 Tell the user:
 ```
 Copy the vendor bundle from an existing fhEVM project:
-  cp -r /home/laolex/Projects/shieldlend/frontend/src/vendor frontend/src/vendor
+  cp -r <existing-fhevm-project>/frontend/src/vendor frontend/src/vendor
 ```
 Then import as: `import { initSDK, createInstance, SepoliaConfig } from "./vendor/relayer-sdk/web.js";`
 
@@ -472,7 +472,7 @@ Files written:
   frontend/src/config.ts
 
 ⚠️  Manual step required:
-  cp -r /home/laolex/Projects/shieldlend/frontend/src/vendor frontend/src/vendor
+  cp -r <existing-fhevm-project>/frontend/src/vendor frontend/src/vendor
 
 Next steps:
   1. npx hardhat compile && npx hardhat test
