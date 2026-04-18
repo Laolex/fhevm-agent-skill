@@ -149,6 +149,107 @@ function onRevealCallback(uint256 requestId, bytes memory cleartexts, bytes memo
 }
 ```
 
+## ❌ CRITICAL: Not pinning handles in `FHE.checkSignatures(handlesList, ...)` callbacks
+```solidity
+// Pattern 3 (makePubliclyDecryptable + off-chain publicDecrypt) passes a handlesList
+// that the CALLER controls. `checkSignatures` only attests "KMS signed these handles
+// decrypt to these cleartexts" — it does NOT pin handles to any expected slot.
+//
+// ❌ VULNERABLE — attacker substitutes a publicly-decryptable euint64(0) handle to
+//    forge debt==0, or substitutes a true-handle to flip isLiquidatable on a solvent user.
+function verifyAndClose(bytes32[] calldata handlesList, bytes calldata cleartexts, bytes calldata proof) external {
+    require(pendingClose[msg.sender], "No pending close");
+    FHE.checkSignatures(handlesList, cleartexts, proof);   // ❌ handlesList[0] unchecked
+    (uint64 debt) = abi.decode(cleartexts, (uint64));
+    require(debt == 0, "Debt not zero");
+    _close(msg.sender);
+}
+
+// ✅ CORRECT — pin every handle to the exact ciphertext the contract produced
+function verifyAndClose(bytes32[] calldata handlesList, bytes calldata cleartexts, bytes calldata proof) external {
+    require(pendingClose[msg.sender], "No pending close");
+    require(handlesList.length == 1, "Expected 1 handle");
+    require(
+        handlesList[0] == FHE.toBytes32(positions[msg.sender].totalDebt),  // ✅ pinned
+        "Handle mismatch"
+    );
+    FHE.checkSignatures(handlesList, cleartexts, proof);
+    (uint64 debt) = abi.decode(cleartexts, (uint64));
+    require(debt == 0, "Debt not zero");
+    _close(msg.sender);
+}
+```
+**Rule:** every Pattern-3 `FHE.checkSignatures(bytes32[], bytes, bytes)` callback MUST `require(handlesList[i] == FHE.toBytes32(expected_i))` for every `i` before calling `checkSignatures`. Pattern 2 (`FHE.requestDecryption` with requestId) is safe — the coprocessor binds the request.
+
+## ❌ CRITICAL: Trusting user-supplied encrypted "equivalent" without a plaintext clamp
+```solidity
+// User deposits 1 USDC (plaintext) but encrypts 1e18 wei of "ETH-equivalent" (ciphertext)
+// as collateral credit. Contract has no way to verify the encrypted value matches the
+// real deposit — collateral model breaks.
+//
+// ❌ VULNERABLE
+function depositToken(address token, uint256 amt, externalEuint64 enc, bytes calldata proof) external {
+    IERC20(token).safeTransferFrom(msg.sender, address(this), amt);
+    euint64 encEquiv = FHE.fromExternal(enc, proof);        // ❌ user-controlled value
+    FHE.allowThis(encEquiv);
+    _addCollateral(msg.sender, encEquiv);                   // ❌ trusted blindly
+}
+
+// ✅ CORRECT — clamp via FHE.select against a plaintext oracle-derived cap
+function depositToken(address token, uint256 amt, externalEuint64 enc, bytes calldata inputProof) external {
+    TokenConfig memory cfg = tokenConfigs[token];
+    require(cfg.supported, "Unsupported token");
+    IERC20(token).safeTransferFrom(msg.sender, address(this), amt);
+
+    uint256 price  = oracle.getEthWeiPerToken(token);       // plaintext, oracle-derived
+    uint256 capWei = (amt * price) / (10 ** cfg.decimals);
+    if (capWei > type(uint64).max) capWei = type(uint64).max;
+
+    euint64 encEquiv = FHE.fromExternal(enc, inputProof);
+    FHE.allowThis(encEquiv);
+    euint64 encCap   = FHE.asEuint64(uint64(capWei));
+    FHE.allowThis(encCap);
+    euint64 clamped  = FHE.select(FHE.lt(encCap, encEquiv), encCap, encEquiv); // ✅ min(cap, encIn)
+    FHE.allowThis(clamped);
+    _addCollateral(msg.sender, clamped);
+}
+```
+**Rule:** whenever a user submits an encrypted value that is supposed to represent a plaintext-observable quantity (token→ETH conversion, USD value, collateral credit), always compute a plaintext upper bound and clamp via `FHE.select(lt(cap, enc), cap, enc)`. Otherwise users over-report freely.
+
+## ❌ HIGH: Binary-search leak via callable predicate on encrypted values
+```solidity
+// ❌ VULNERABLE — anyone can sweep thresholds and decrypt each ebool result,
+//    binary-searching the encrypted score / balance / vote count.
+function meetsThreshold(address subject, uint64 threshold) external returns (ebool) {
+    require(scores[subject].active, "No score");
+    euint64 encScore = scores[subject].score;
+    ebool   result   = FHE.ge(encScore, FHE.asEuint64(threshold));
+    FHE.allow(result, msg.sender);    // ❌ grants ACL to anyone who calls
+    return result;
+}
+
+// ✅ CORRECT — role-gate the predicate. Only the subject or a whitelisted reader
+//    (e.g. the lending contract that integrates ShieldScore) may probe.
+bytes32 public constant READER_ROLE = keccak256("READER_ROLE");
+
+function grantReaderRole(address who) external onlyRole(DEFAULT_ADMIN_ROLE) {
+    _grantRole(READER_ROLE, who);
+}
+
+function meetsThreshold(address subject, uint64 threshold) external returns (ebool) {
+    require(scores[subject].active, "No score");
+    require(
+        msg.sender == subject || hasRole(READER_ROLE, msg.sender),   // ✅ gated
+        "Not authorised reader"
+    );
+    euint64 encScore = scores[subject].score;
+    ebool   result   = FHE.ge(encScore, FHE.asEuint64(threshold));
+    FHE.allow(result, msg.sender);
+    return result;
+}
+```
+**Rule:** any function that returns an encrypted predicate over private data is a decryption oracle for anyone who holds ACL. Gate it by role (`READER_ROLE`, consumer contract) or require `msg.sender == subject`. Binary search on 10-bit values is 10 calls.
+
 ## ❌ FHE.sub underflow without guard
 ```solidity
 euint64 result = FHE.sub(a, b);  // ❌ wraps to huge number if a < b

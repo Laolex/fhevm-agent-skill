@@ -20,9 +20,9 @@ When this skill is invoked, check the args/command first and route accordingly:
 
 | If args or user said… | Action |
 |-----------------------|--------|
-| `scaffold` / `/fhevm scaffold` / "generate a contract" / "build a new fhevm contract" | Read `./scaffold.md` then execute that workflow |
-| `audit` / `/fhevm audit` / "audit this contract" / "review for ACL issues" | Read `./audit.md` then execute that workflow |
-| `migrate` / `/fhevm migrate` / "migrate from TFHE" / "update to new FHE API" | Read `./migrate.md` then execute that workflow |
+| `scaffold` / `/fhevm scaffold` / "generate a contract" / "build a new fhevm contract" | Read `~/.claude/skills/fhevm/scaffold.md` then execute that workflow |
+| `audit` / `/fhevm audit` / "audit this contract" / "review for ACL issues" | Read `~/.claude/skills/fhevm/audit.md` then execute that workflow |
+| `migrate` / `/fhevm migrate` / "migrate from TFHE" / "update to new FHE API" | Read `~/.claude/skills/fhevm/migrate.md` then execute that workflow |
 | No args / help / "what can you do" | Show the command menu below and wait for user |
 | Any other fhEVM task | Read relevant reference module(s) below, then proceed |
 
@@ -113,4 +113,9 @@ try {
 ---
 
 ## Version
+v3.4.0 — **Security findings from ShieldLend pre-submission audit (2026-04-17):**
+(1) **Handle-pinning** — every Pattern-3 callback receiving `bytes32[] handlesList` MUST `require(handlesList[i] == FHE.toBytes32(expected))` before `FHE.checkSignatures`; without it, attackers substitute a valid-signed pair from elsewhere to forge outcomes. New audit check A7 + anti-pattern.
+(2) **Input-equivalent clamping** — any encrypted value the user submits that represents a plaintext quantity (token→ETH, USD, credit) must be clamped via `FHE.select(lt(cap, enc), cap, enc)` against an oracle-derived plaintext cap; unclamped, the collateral model is fictional. New audit check A8 + anti-pattern.
+(3) **Predicate binary-search leak** — `meetsThreshold`/`isEligible`-style functions must be role-gated (`msg.sender == subject || hasRole(READER_ROLE, msg.sender)`); otherwise any address binary-searches the encrypted value in O(log n) calls. New audit check A9 + anti-pattern.
+
 v3.3.0 — Proxy header forwarding: hardcoding `content-type: application/json` drops `ZAMA-SDK-VERSION`/`ZAMA-SDK-NAME` → FHE offline; fix: forward original headers. Duplicate env var declarations without `.trim()` cause ENS `{0A}` error; fix: declare once in `config.ts` with `.trim()`, import everywhere. Path extraction anchored to `^\/api\/zama-relay` with `|| '/'` fallback.

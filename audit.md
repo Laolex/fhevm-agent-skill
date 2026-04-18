@@ -34,6 +34,9 @@ Severity levels: `[CRITICAL]` (security hole), `[HIGH]` (broken functionality), 
 - [ ] **A4** `FHE.checkSignatures(...)` is called before `abi.decode` in every decryption callback — if not: `[CRITICAL]`
 - [ ] **A5** No encrypted value is emitted in events — if yes: `[HIGH]` privacy leak
 - [ ] **A6** No `mapping(address => euint64) public` — encrypted handles must be private — if yes: `[HIGH]`
+- [ ] **A7** Every Pattern-3 callback that receives `bytes32[] calldata handlesList` asserts `require(handlesList[i] == FHE.toBytes32(expected_i))` for every expected handle BEFORE `FHE.checkSignatures` — if not: `[CRITICAL]` handle-substitution attack lets any caller pass a forged pair (e.g. debt==0, isLiquidatable==true) that a valid KMS signature covers
+- [ ] **A8** Any function that accepts `externalEuint*` meant to represent a plaintext-observable quantity (token→ETH equivalence, USD value, collateral credit) clamps against a plaintext upper bound via `FHE.select(FHE.lt(encCap, encIn), encCap, encIn)` — if unclamped: `[CRITICAL]` user over-reports freely, collateral model is fictional
+- [ ] **A9** Any function returning an encrypted predicate (`meetsThreshold`, `isEligible`, `hasBalance`) is role-gated (`msg.sender == subject || hasRole(READER_ROLE, msg.sender)`) — if callable by anyone against anyone: `[HIGH]` binary-search leak decodes the encrypted value in O(log n) calls
 
 ### B. Contract API checks (08-anti-patterns + 02-types-ops)
 

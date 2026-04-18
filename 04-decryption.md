@@ -199,6 +199,18 @@ function verifyReveal(
     bytes calldata decryptionProof
 ) external {
     require(pendingReveal[subject], "No pending reveal");
+
+    // 🔒 CRITICAL: pin handlesList to the expected ciphertext BEFORE checkSignatures.
+    //    checkSignatures only attests "KMS signed these handles decrypt to these
+    //    cleartexts" — it does NOT bind the handle to any caller-supplied slot.
+    //    Without this require, any caller can substitute a publicly-decryptable
+    //    euint64(0) (or any forged pair) from elsewhere and the verify would pass.
+    require(handlesList.length == 1, "Expected 1 handle");
+    require(
+        handlesList[0] == FHE.toBytes32(positions[subject].isLiquidatable),
+        "Handle mismatch"
+    );
+
     FHE.checkSignatures(handlesList, abiEncodedCleartexts, decryptionProof); // ✅ array form
     bool isLiquidatable = abi.decode(abiEncodedCleartexts, (bool));
     delete pendingReveal[subject];
@@ -207,6 +219,10 @@ function verifyReveal(
 
 // ✅ Pattern 3 checkSignatures signature (array form — different from Pattern 2):
 // FHE.checkSignatures(bytes32[] handlesList, bytes abiEncodedCleartexts, bytes decryptionProof)
+//
+// 🔒 Pattern 3 is caller-controlled: always precede checkSignatures with a
+//    `require(handlesList[i] == FHE.toBytes32(expected_i))` for every handle.
+//    Pattern 2 (requestDecryption + requestId) is coprocessor-bound — no pin needed.
 
 // ✅ Pattern 2 checkSignatures signature (requestId form):
 // FHE.checkSignatures(uint256 requestId, bytes cleartexts, bytes proof)
@@ -238,6 +254,11 @@ function verifyLiquidationReveal(
     bytes calldata decryptionProof
 ) external {
     require(pendingLiquidationReveal[borrower], "No pending reveal");
+    require(handlesList.length == 1, "Expected 1 handle");
+    require(
+        handlesList[0] == FHE.toBytes32(positions[borrower].isLiquidatable),
+        "Handle mismatch"   // 🔒 block handle-substitution attack
+    );
     FHE.checkSignatures(handlesList, abiEncodedCleartexts, decryptionProof); // ✅ verify
     bool isLiq = abi.decode(abiEncodedCleartexts, (bool));
     delete pendingLiquidationReveal[borrower];
@@ -275,6 +296,11 @@ function verifyAndClose(
     bytes calldata decryptionProof
 ) external nonReentrant {
     require(pendingClose[msg.sender], "No pending close");
+    require(handlesList.length == 1, "Expected 1 handle");
+    require(
+        handlesList[0] == FHE.toBytes32(positions[msg.sender].totalDebt),
+        "Handle mismatch"   // 🔒 prevent caller substituting any euint64(0) handle
+    );
     FHE.checkSignatures(handlesList, abiEncodedCleartexts, decryptionProof);
     uint64 debtPlaintext = abi.decode(abiEncodedCleartexts, (uint64));
     require(debtPlaintext == 0, "Outstanding debt");
