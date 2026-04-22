@@ -1,19 +1,19 @@
 ---
 name: fhevm-decryption
-description: fhEVM decryption patterns — userDecrypt (SDK v0.4.1, batch HandleContractPair), FHE.requestDecryption oracle callback (public reveal), FHE.makePubliclyDecryptable relayer pattern
+description: fhEVM decryption patterns — userDecrypt (SDK v0.4.1, batch HandleContractPair), FHE.makePubliclyDecryptable relayer verification pattern
 type: reference
 ---
 
 # fhEVM — Decryption Patterns
 
-Three patterns. Choose based on who needs the value and when.
+Two production patterns. Choose based on who needs the value and when.
 
-| | Pattern 1 | Pattern 2 | Pattern 3 |
-|---|---|---|---|
-| **API** | `fhevmInstance.userDecrypt` | `FHE.requestDecryption` | `FHE.makePubliclyDecryptable` |
-| **Who sees it** | Only the authorized user | Publicly — via callback | Publicly — via relayer |
-| **Contract receives plaintext** | No | Yes — in callback | No |
-| **Use when** | User decrypts their own position | Contract logic needs the result | Only need to publish the value |
+|                                 | Pattern 1                        | Pattern 3                                     |
+| ------------------------------- | -------------------------------- | --------------------------------------------- |
+| **API**                         | `fhevmInstance.userDecrypt`      | `FHE.makePubliclyDecryptable`                 |
+| **Who sees it**                 | Only the authorized user         | Publicly — via relayer                        |
+| **Contract receives plaintext** | No                               | Yes — when verify function decodes cleartexts |
+| **Use when**                    | User decrypts their own position | Public reveal / settlement flows              |
 
 ---
 
@@ -23,6 +23,7 @@ Three patterns. Choose based on who needs the value and when.
 > `createEIP712` signature changed from `(pubKey, contractAddr)` to `(pubKey, contractAddresses[], startTimestamp, durationDays)`.
 
 **Contract:**
+
 ```solidity
 function getEncryptedSalary(address employee) external view returns (euint64) {
     return salaries[employee];
@@ -31,6 +32,7 @@ function getEncryptedSalary(address employee) external view returns (euint64) {
 ```
 
 **Frontend — single handle:**
+
 ```typescript
 import { createInstance } from "@zama-fhe/relayer-sdk/web.js";
 
@@ -39,55 +41,80 @@ const { publicKey, privateKey } = fhevmInstance.generateKeypair();
 
 // ✅ SDK v0.4.1: createEIP712(pubKey, contractAddresses[], startTimestamp, durationDays)
 const now = Math.floor(Date.now() / 1000);
-const eip712 = fhevmInstance.createEIP712(publicKey, [CONTRACT_ADDRESS], now, 1);
+const eip712 = fhevmInstance.createEIP712(
+  publicKey,
+  [CONTRACT_ADDRESS],
+  now,
+  1,
+);
 
 // ✅ Sign EIP-712 — type name may vary between SDK versions
 const typeName = eip712.types.Reencrypt
-    ? "Reencrypt"
-    : Object.keys(eip712.types).find((k: string) => k !== "EIP712Domain")!;
+  ? "Reencrypt"
+  : Object.keys(eip712.types).find((k: string) => k !== "EIP712Domain")!;
 const signature = await signer.signTypedData(
-    eip712.domain,
-    { [typeName]: eip712.types[typeName] },
-    eip712.message
+  eip712.domain,
+  { [typeName]: eip712.types[typeName] },
+  eip712.message,
 );
 
 // ✅ SDK v0.4.1: userDecrypt(HandleContractPair[], privKey, pubKey, sig, contractAddresses[], userAddr, startTs, days)
 const handles = [{ handle: encHandle, contractAddress: CONTRACT_ADDRESS }];
 const results = await fhevmInstance.userDecrypt(
-    handles, privateKey, publicKey, signature,
-    [CONTRACT_ADDRESS], userAddress, now, 1,
+  handles,
+  privateKey,
+  publicKey,
+  signature,
+  [CONTRACT_ADDRESS],
+  userAddress,
+  now,
+  1,
 );
 // results is Record<0xHandleHex, bigint | boolean | string>
 const plaintext = Object.values(results)[0] as bigint;
 ```
 
 **Frontend — batch decrypt (multiple handles, one signature):**
+
 ```typescript
 // Fetch all encrypted handles from contract
 const [collHandle, debtHandle, rateHandle, scoreHandle] = await Promise.all([
-    contract.getEncCollateral(userAddress),
-    contract.getEncDebt(userAddress),
-    contract.getEncRate(userAddress),
-    contract.getEncScore(userAddress),
+  contract.getEncCollateral(userAddress),
+  contract.getEncDebt(userAddress),
+  contract.getEncRate(userAddress),
+  contract.getEncScore(userAddress),
 ]);
 
 const { publicKey, privateKey } = fhevmInstance.generateKeypair();
 const now = Math.floor(Date.now() / 1000);
-const eip712 = fhevmInstance.createEIP712(publicKey, [CONTRACT_ADDRESS], now, 1);
+const eip712 = fhevmInstance.createEIP712(
+  publicKey,
+  [CONTRACT_ADDRESS],
+  now,
+  1,
+);
 const typeName = eip712.types.Reencrypt
-    ? "Reencrypt"
-    : Object.keys(eip712.types).find((k: string) => k !== "EIP712Domain")!;
+  ? "Reencrypt"
+  : Object.keys(eip712.types).find((k: string) => k !== "EIP712Domain")!;
 const sig = await signer.signTypedData(
-    eip712.domain, { [typeName]: eip712.types[typeName] }, eip712.message
+  eip712.domain,
+  { [typeName]: eip712.types[typeName] },
+  eip712.message,
 );
 
 // ✅ All handles in one call — single network round-trip
 const handles = [collHandle, debtHandle, rateHandle, scoreHandle].map(
-    (h: string) => ({ handle: h, contractAddress: CONTRACT_ADDRESS })
+  (h: string) => ({ handle: h, contractAddress: CONTRACT_ADDRESS }),
 );
 const results = await fhevmInstance.userDecrypt(
-    handles, privateKey, publicKey, sig,
-    [CONTRACT_ADDRESS], userAddress, now, 1,
+  handles,
+  privateKey,
+  publicKey,
+  sig,
+  [CONTRACT_ADDRESS],
+  userAddress,
+  now,
+  1,
 );
 // Results keyed by handle hex — iterate in order
 const vals = Object.values(results) as bigint[];
@@ -95,73 +122,61 @@ const [collateral, debt, rate, score] = vals;
 ```
 
 **Multi-contract decrypt (handles from different contracts):**
+
 ```typescript
 // When handles come from multiple contracts, list all contract addresses
 const handles = [
-    { handle: lendingHandle, contractAddress: LENDING_ADDRESS },
-    { handle: scoreHandle, contractAddress: SCORE_ADDRESS },
+  { handle: lendingHandle, contractAddress: LENDING_ADDRESS },
+  { handle: scoreHandle, contractAddress: SCORE_ADDRESS },
 ];
 const eip712 = fhevmInstance.createEIP712(
-    publicKey, [LENDING_ADDRESS, SCORE_ADDRESS], now, 1
+  publicKey,
+  [LENDING_ADDRESS, SCORE_ADDRESS],
+  now,
+  1,
 );
 // ... sign and call userDecrypt with [LENDING_ADDRESS, SCORE_ADDRESS]
 ```
 
 ---
 
-## Pattern 2 — FHE oracle / public decryption (ERC-7995)
-Used when contract logic needs the plaintext after decryption (vote tallies, market resolution).
-**Current API — do NOT use old Gateway.* approach.**
+## Pattern 2 — Deprecated in this stack
+
+`FHE.requestDecryption(...)` is not available in the currently pinned stack (`@fhevm/solidity ^0.11.1` + `@fhevm/hardhat-plugin ^0.4.x`).
+Use Pattern 3 with `FHE.makePubliclyDecryptable` + `FHE.checkSignatures(handlesList, ...)` and handle pinning.
 
 ```solidity
-// ✅ No GatewayCaller, no SepoliaZamaGatewayConfig, no onlyGateway
-contract VotingContract is SepoliaConfig {
-    euint64 private encryptedTally;
-    uint64  public revealedTally;
-    bool    public isRevealed;
-    mapping(uint256 => bool) public callbackCalled;
-
-    function requestReveal() external {
-        require(block.timestamp > endTime, "Not expired");
-        require(!isRevealed, "Already revealed");
-
-        bytes32[] memory cts = new bytes32[](1);
-        cts[0] = FHE.toBytes32(encryptedTally);
-        uint256 requestId = FHE.requestDecryption(cts, this.onRevealCallback.selector);
-    }
-
-    // ✅ Callback signature: (requestId, bytes cleartexts, bytes decryptionProof)
-    function onRevealCallback(
-        uint256 requestId,
-        bytes memory cleartexts,
-        bytes memory decryptionProof
-    ) external {
-        FHE.checkSignatures(requestId, cleartexts, decryptionProof); // ✅ REQUIRED
-        (uint64 result) = abi.decode(cleartexts, (uint64));
-        revealedTally = result;
-        isRevealed = true;
-        callbackCalled[requestId] = true;
-    }
+function requestTallyReveal(uint256 proposalId) external {
+    Proposal storage p = proposals[proposalId];
+    FHE.makePubliclyDecryptable(p.encForVotes);
+    FHE.makePubliclyDecryptable(p.encAgainstVotes);
+    FHE.makePubliclyDecryptable(p.encAbstainVotes);
+    p.revealRequested = true;
 }
 
-// ✅ Multiple values — request and decode in same order
-function requestMultiReveal() external {
-    bytes32[] memory cts = new bytes32[](3);
-    cts[0] = FHE.toBytes32(forVotes);
-    cts[1] = FHE.toBytes32(againstVotes);
-    cts[2] = FHE.toBytes32(abstainVotes);
-    uint256 requestId = FHE.requestDecryption(cts, this.onMultiCallback.selector);
-    requestIdToProposal[requestId] = proposalId;
-}
+function verifyTallyReveal(
+    uint256 proposalId,
+    bytes32[] calldata handlesList,
+    bytes calldata abiEncodedCleartexts,
+    bytes calldata decryptionProof
+) external {
+    Proposal storage p = proposals[proposalId];
+    require(handlesList.length == 3, "Expected 3 handles");
+    require(handlesList[0] == FHE.toBytes32(p.encForVotes), "For handle mismatch");
+    require(handlesList[1] == FHE.toBytes32(p.encAgainstVotes), "Against handle mismatch");
+    require(handlesList[2] == FHE.toBytes32(p.encAbstainVotes), "Abstain handle mismatch");
 
-function onMultiCallback(uint256 requestId, bytes memory cleartexts, bytes memory decryptionProof) external {
-    FHE.checkSignatures(requestId, cleartexts, decryptionProof);
-    (uint64 revFor, uint64 revAgainst, uint64 revAbstain) =
-        abi.decode(cleartexts, (uint64, uint64, uint64));
+    FHE.checkSignatures(handlesList, abiEncodedCleartexts, decryptionProof);
+    (uint64 forVotes, uint64 againstVotes, uint64 abstainVotes) = abi.decode(
+        abiEncodedCleartexts,
+        (uint64, uint64, uint64)
+    );
+    // ... settle
 }
 ```
 
 ### ❌ Old Gateway API — do NOT use
+
 ```solidity
 // ❌ ALL of these are wrong/outdated
 import {GatewayCaller} from "@fhevm/solidity/gateway/GatewayCaller.sol";
@@ -175,6 +190,7 @@ function cb(uint256 requestId, uint64 result) public onlyGateway {} // ❌ wrong
 ---
 
 ## Pattern 3 — Relayer-assisted public decryption (v0.11.1)
+
 Used when only the value needs publishing — contract doesn't need the plaintext itself.
 Available in `@fhevm/solidity ^0.11.1`.
 
@@ -224,13 +240,13 @@ function verifyReveal(
 //    `require(handlesList[i] == FHE.toBytes32(expected_i))` for every handle.
 //    Pattern 2 (requestDecryption + requestId) is coprocessor-bound — no pin needed.
 
-// ✅ Pattern 2 checkSignatures signature (requestId form):
-// FHE.checkSignatures(uint256 requestId, bytes cleartexts, bytes proof)
+// No requestId-based checkSignatures overload in this stack.
 ```
 
 ---
 
 ## Production Pattern 3: 3-step liquidation flow (ShieldLend)
+
 Used when a third party (anyone) initiates reveal, then a permissioned role executes.
 
 ```solidity
@@ -274,6 +290,7 @@ function liquidate(address borrower) external onlyRole(LIQUIDATOR_ROLE) nonReent
 ```
 
 ## Production Pattern 3: 2-step position close (borrower self-close)
+
 User requests decryption of their own debt to prove it's zero before returning collateral:
 
 ```solidity

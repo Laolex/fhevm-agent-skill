@@ -15,35 +15,38 @@ You are an fhEVM code generator. When this command is invoked, execute the full 
 
 Parse the user's description and extract:
 
-| Field | Source | Default if missing |
-|-------|--------|-------------------|
-| **Contract name** | User message | `ConfidentialProtocol` |
-| **What to encrypt** | User message | collateral + debt amounts |
-| **Roles needed** | User message | ADMIN_ROLE only |
+| Field                  | Source       | Default if missing                  |
+| ---------------------- | ------------ | ----------------------------------- |
+| **Contract name**      | User message | `ConfidentialProtocol`              |
+| **What to encrypt**    | User message | collateral + debt amounts           |
+| **Roles needed**       | User message | ADMIN_ROLE only                     |
 | **Decryption pattern** | User message | Pattern 3 (makePubliclyDecryptable) |
-| **Token type** | User message | ETH only |
-| **Multi-asset?** | User message | false |
-| **Credit score gate?** | User message | false |
+| **Token type**         | User message | ETH only                            |
+| **Multi-asset?**       | User message | false                               |
+| **Credit score gate?** | User message | false                               |
 
 If the user says "lending" → use ConfidentialLending architecture (collateral/debt/health factor)
-If the user says "voting" → use encrypted tallies + FHE.select + Pattern 2 oracle reveal
+If the user says "voting" → use encrypted tallies + FHE.select + Pattern 3 public reveal (request + verify with handle pinning)
 If the user says "payroll" → use EMPLOYER_ROLE + AUDITOR_ROLE + salary euint64
 If the user says "vault" → use single euint64 balance + deposit/withdraw + re-encrypt
 
 ### Zama Season 2 Builder Track context (apply when building for hackathon)
 
 **What Season 1 winners had in common:**
+
 - Creative use cases (not just "vault"): ZamaDAO (governance), ZamaBeliefSystem (prediction), Private-v4-Hooks (Uniswap AMM), privacy-pool-monorepo, Paychain (payroll)
 - Real FHE usage: encrypted state that would be meaningless without FHE (not just hiding a number)
 - Complete polish: working deployed frontend + working re-encrypt + working public decrypt
 - DeFi primitives score higher than toy demos
 
 **Avoid (already done / low scores):**
+
 - Confidential payroll → Paychain won Season 1 with this
 - Basic vault → too minimal
 - ShieldLend (lending) → already our Season 1 submission
 
 **High-scoring use cases still available:**
+
 - Confidential AMM order book (hidden prices/quantities until fill)
 - Sealed-bid auction (FHE.select for winner determination)
 - Confidential DAO voting (hidden votes, tallied on-chain)
@@ -59,6 +62,7 @@ If user hasn't specified a use case and is building for Season 2, suggest one of
 Write the full contract to `contracts/<ContractName>.sol` following these rules:
 
 **Imports (always):**
+
 ```solidity
 pragma solidity ^0.8.24;
 import {FHE, euint64, ebool, externalEuint64} from "@fhevm/solidity/lib/FHE.sol";
@@ -69,18 +73,21 @@ import {Pausable} from "@openzeppelin/contracts/utils/Pausable.sol";
 ```
 
 **If ERC20 tokens involved, add:**
+
 ```solidity
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 ```
 
 **Inheritance order:**
+
 ```solidity
 contract <Name> is ZamaEthereumConfig, AccessControlEnumerable, ReentrancyGuard, Pausable {
     using SafeERC20 for IERC20; // if tokens involved
 ```
 
 **Encrypted state — always private:**
+
 ```solidity
 struct Position {
     euint64 <field1>;   // what it represents in ETH-wei or token units
@@ -92,6 +99,7 @@ mapping(address => Position) private positions;
 ```
 
 **Input functions — always include inputHandle + inputProof:**
+
 ```solidity
 function deposit(bytes32 inputHandle, bytes calldata inputProof) external payable nonReentrant whenNotPaused {
     euint64 enc = FHE.fromExternal(externalEuint64.wrap(inputHandle), inputProof);
@@ -102,23 +110,27 @@ function deposit(bytes32 inputHandle, bytes calldata inputProof) external payabl
 ```
 
 **ACL rules — NEVER skip:**
+
 - `FHE.allowThis(x)` immediately after every `FHE.fromExternal`
 - `FHE.allowThis(x)` after every computed value (FHE.add, FHE.sub, FHE.select, etc.)
 - `FHE.allow(x, user)` for every user who needs to re-encrypt
 - If LIQUIDATOR_ROLE exists: `_allowLiquidators(flag)` using AccessControlEnumerable pattern
 
 **Floor-at-zero subtraction (always use this form):**
+
 ```solidity
 euint64 result = FHE.select(FHE.not(FHE.lt(a, b)), FHE.sub(a, b), FHE.asEuint64(0));
 ```
 
 **Events — only plaintext metadata:**
+
 ```solidity
 event Deposited(address indexed user, uint256 timestamp);   // ✅
 // ❌ Never emit euint64 handles in events
 ```
 
 **Decryption — use Pattern 3 for liquidation/close (two-step):**
+
 ```solidity
 // Step 1
 function requestReveal(address subject) external {
@@ -146,52 +158,66 @@ import { ethers, fhevm } from "hardhat";
 import { expect } from "chai";
 
 describe("<ContractName>", function () {
-    let contract: any, owner: any, user: any;
+  let contract: any, owner: any, user: any;
 
-    before(async function () {
-        await fhevm.initializeCLIApi(); // ✅ REQUIRED — must be first
-    });
+  before(async function () {
+    await fhevm.initializeCLIApi(); // ✅ REQUIRED — must be first
+  });
 
-    beforeEach(async function () {
-        [owner, user] = await ethers.getSigners();
-        const Factory = await ethers.getContractFactory("<ContractName>");
-        contract = await Factory.deploy();
-        await contract.waitForDeployment();
-    });
+  beforeEach(async function () {
+    [owner, user] = await ethers.getSigners();
+    const Factory = await ethers.getContractFactory("<ContractName>");
+    contract = await Factory.deploy();
+    await contract.waitForDeployment();
+  });
 
-    // Generate tests for every public function:
-    // - Happy path (valid inputs)
-    // - ACL: verify re-encrypt returns correct value
-    // - Edge cases: zero amounts, duplicate deposits
-    // - Role restrictions: non-admin cannot call admin functions
+  // Generate tests for every public function:
+  // - Happy path (valid inputs)
+  // - ACL: verify re-encrypt returns correct value
+  // - Edge cases: zero amounts, duplicate deposits
+  // - Role restrictions: non-admin cannot call admin functions
 
-    it("should encrypt and store value", async function () {
-        const enc = await fhevm
-            .createEncryptedInput(await contract.getAddress(), user.address)
-            .add64(BigInt(1_000_000))
-            .encrypt();
-        await contract.connect(user).deposit(enc.handles[0], enc.inputProof, { value: ethers.parseEther("0.1") });
-        expect(await contract.isActive(user.address)).to.be.true;
-    });
+  it("should encrypt and store value", async function () {
+    const enc = await fhevm
+      .createEncryptedInput(await contract.getAddress(), user.address)
+      .add64(BigInt(1_000_000))
+      .encrypt();
+    await contract
+      .connect(user)
+      .deposit(enc.handles[0], enc.inputProof, {
+        value: ethers.parseEther("0.1"),
+      });
+    expect(await contract.isActive(user.address)).to.be.true;
+  });
 
-    it("should decrypt user value correctly", async function () {
-        // ... deposit first ...
-        const handle = await contract.getEncrypted<Field>(user.address);
-        const { publicKey, privateKey } = fhevm.generateKeypair();
-        const contractAddr = await contract.getAddress();
-        const now = Math.floor(Date.now() / 1000);
-        const eip712 = fhevm.createEIP712(publicKey, [contractAddr], now, 1);
-        const typeName = eip712.types.Reencrypt
-            ? "Reencrypt"
-            : Object.keys(eip712.types).find((k: string) => k !== "EIP712Domain")!;
-        const sig = await user.signTypedData(eip712.domain, { [typeName]: eip712.types[typeName] }, eip712.message);
-        const results = await fhevm.userDecrypt(
-            [{ handle, contractAddress: contractAddr }],
-            privateKey, publicKey, sig, [contractAddr], user.address, now, 1,
-        );
-        const decrypted = Object.values(results)[0] as bigint;
-        expect(decrypted).to.equal(BigInt(1_000_000));
-    });
+  it("should decrypt user value correctly", async function () {
+    // ... deposit first ...
+    const handle = await contract.getEncrypted<Field>(user.address);
+    const { publicKey, privateKey } = fhevm.generateKeypair();
+    const contractAddr = await contract.getAddress();
+    const now = Math.floor(Date.now() / 1000);
+    const eip712 = fhevm.createEIP712(publicKey, [contractAddr], now, 1);
+    const typeName = eip712.types.Reencrypt
+      ? "Reencrypt"
+      : Object.keys(eip712.types).find((k: string) => k !== "EIP712Domain")!;
+    const sig = await user.signTypedData(
+      eip712.domain,
+      { [typeName]: eip712.types[typeName] },
+      eip712.message,
+    );
+    const results = await fhevm.userDecrypt(
+      [{ handle, contractAddress: contractAddr }],
+      privateKey,
+      publicKey,
+      sig,
+      [contractAddr],
+      user.address,
+      now,
+      1,
+    );
+    const decrypted = Object.values(results)[0] as bigint;
+    expect(decrypted).to.equal(BigInt(1_000_000));
+  });
 });
 ```
 
@@ -207,24 +233,27 @@ Write `scripts/deploy.ts`:
 import { ethers } from "hardhat";
 
 async function main() {
-    const [deployer] = await ethers.getSigners();
-    console.log("Deployer:", deployer.address);
+  const [deployer] = await ethers.getSigners();
+  console.log("Deployer:", deployer.address);
 
-    const Factory = await ethers.getContractFactory("<ContractName>");
-    const contract = await Factory.deploy();
-    await contract.waitForDeployment();
-    const addr = await contract.getAddress();
-    console.log("<ContractName>:", addr);
-    console.log("Etherscan:", `https://sepolia.etherscan.io/address/${addr}`);
+  const Factory = await ethers.getContractFactory("<ContractName>");
+  const contract = await Factory.deploy();
+  await contract.waitForDeployment();
+  const addr = await contract.getAddress();
+  console.log("<ContractName>:", addr);
+  console.log("Etherscan:", `https://sepolia.etherscan.io/address/${addr}`);
 
-    // Wire any companion contracts here
-    // Grant roles if needed: await contract.grantRole(...)
+  // Wire any companion contracts here
+  // Grant roles if needed: await contract.grantRole(...)
 
-    console.log("\nUpdate frontend/src/config.ts:");
-    console.log(`  CONTRACT_ADDRESS = "${addr}"`);
+  console.log("\nUpdate frontend/src/config.ts:");
+  console.log(`  CONTRACT_ADDRESS = "${addr}"`);
 }
 
-main().catch((e) => { console.error(e); process.exit(1); });
+main().catch((e) => {
+  console.error(e);
+  process.exit(1);
+});
 ```
 
 ---
@@ -234,6 +263,7 @@ main().catch((e) => { console.error(e); process.exit(1); });
 Write ALL of the following files (not just a snippet — a complete working app):
 
 ### `frontend/package.json`
+
 ```json
 {
   "name": "<contract-name-kebab>-frontend",
@@ -259,9 +289,11 @@ Write ALL of the following files (not just a snippet — a complete working app)
   }
 }
 ```
+
 Note: do NOT put @zama-fhe/relayer-sdk in package.json — it ships as a vendor bundle.
 
 ### `frontend/vite.config.ts`
+
 ```typescript
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
@@ -279,6 +311,7 @@ export default defineConfig({
 ```
 
 ### `frontend/vercel.json`
+
 ```json
 {
   "headers": [
@@ -297,40 +330,47 @@ export default defineConfig({
 ```
 
 ### `frontend/api/zama-relay.js`
+
 ```javascript
-export const config = { runtime: 'edge' };
+export const config = { runtime: "edge" };
 export default async function handler(req) {
-  if (req.method === 'OPTIONS') {
-    return new Response(null, { status: 204, headers: {
-      'Access-Control-Allow-Origin': '*',
-      'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-      'Access-Control-Allow-Headers': '*',
-    }});
+  if (req.method === "OPTIONS") {
+    return new Response(null, {
+      status: 204,
+      headers: {
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+        "Access-Control-Allow-Headers": "*",
+      },
+    });
   }
   const url = new URL(req.url);
-  const path = url.pathname.replace('/api/zama-relay', '');
-  const target = `https://relayer.testnet.zama.org${path}${url.search ?? ''}`;
+  const path = url.pathname.replace("/api/zama-relay", "");
+  const target = `https://relayer.testnet.zama.org${path}${url.search ?? ""}`;
   const response = await fetch(target, {
     method: req.method,
-    headers: { 'content-type': 'application/json' },
-    body: req.method !== 'GET' && req.method !== 'HEAD' ? req.body : undefined,
+    headers: { "content-type": "application/json" },
+    body: req.method !== "GET" && req.method !== "HEAD" ? req.body : undefined,
   });
   // ✅ Forward actual content-type — binary endpoints MUST use arrayBuffer
-  const contentType = response.headers.get('content-type') ?? 'application/octet-stream';
-  const data = contentType.includes('octet-stream') || contentType.includes('binary')
-    ? await response.arrayBuffer()
-    : await response.text();
+  const contentType =
+    response.headers.get("content-type") ?? "application/octet-stream";
+  const data =
+    contentType.includes("octet-stream") || contentType.includes("binary")
+      ? await response.arrayBuffer()
+      : await response.text();
   return new Response(data, {
     status: response.status,
     headers: {
-      'Access-Control-Allow-Origin': '*',
-      'content-type': contentType,
+      "Access-Control-Allow-Origin": "*",
+      "content-type": contentType,
     },
   });
 }
 ```
 
 ### `frontend/index.html`
+
 ```html
 <!doctype html>
 <html lang="en">
@@ -347,6 +387,7 @@ export default async function handler(req) {
 ```
 
 ### `frontend/src/main.tsx`
+
 ```typescript
 import React from "react";
 import ReactDOM from "react-dom/client";
@@ -358,6 +399,7 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
 ```
 
 ### `frontend/src/config.ts`
+
 ```typescript
 export const CONTRACT_ADDRESS = "<deployed-address-or-placeholder>";
 export const CHAIN_ID = 11155111; // Sepolia
@@ -367,10 +409,12 @@ export const CHAIN_ID = 11155111; // Sepolia
 
 Do NOT import @zama-fhe/relayer-sdk from npm. The SDK ships as a vendored bundle.
 Tell the user:
+
 ```
 Copy the vendor bundle from an existing fhEVM project:
   cp -r <existing-fhevm-project>/frontend/src/vendor frontend/src/vendor
 ```
+
 Then import as: `import { initSDK, createInstance, SepoliaConfig } from "./vendor/relayer-sdk/web.js";`
 
 ### `frontend/src/App.tsx`
@@ -444,6 +488,7 @@ export default function App() {
 ```
 
 Customize the JSX to expose the contract's main functions (deposit, borrow, etc.) with:
+
 - Input fields for amounts
 - Encrypt → send flow using `fhevmInst.encryptUint`
 - Decrypt → display flow using `fhevmInst.userDecrypt`

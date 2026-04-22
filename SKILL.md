@@ -48,9 +48,9 @@ When this skill is invoked, check the args/command first and route accordingly:
 | [01-setup.md](01-setup.md) | Install, hardhat.config.ts with vars(), multi-contract deploy, ZamaConfig patterns |
 | [02-types-ops.md](02-types-ops.md) | euint8/16/32/64/128, ebool, eaddress — all FHE ops, tiered select, interest math, gas costs |
 | [03-input-acl.md](03-input-acl.md) | FHE.fromExternal proofs, FHE.allowTransient, _applyCollateral pattern, multi-role ACL |
-| [04-decryption.md](04-decryption.md) | Pattern 1 (userDecrypt v0.4.1, batch HandleContractPair, multi-contract), Pattern 2 (requestDecryption oracle), Pattern 3 (makePubliclyDecryptable) |
+| [04-decryption.md](04-decryption.md) | Pattern 1 (userDecrypt v0.4.1, batch HandleContractPair, multi-contract), Pattern 3 (makePubliclyDecryptable + signature verification) |
 | [05-frontend.md](05-frontend.md) | initSDK + SepoliaConfig, userDecrypt, ethers v6 provider fix, UI phase state machine (Zustand), computation overlay, encrypted shimmer, CORS proxy |
-| [06-testing.md](06-testing.md) | initializeCLIApi, createEncryptedInput, userDecrypt (v0.4.1), publicDecryptEbool, requestDecryption callback |
+| [06-testing.md](06-testing.md) | initializeCLIApi, createEncryptedInput, userDecrypt (v0.4.1), publicDecryptEbool, verifyReveal flow |
 | [07-templates.md](07-templates.md) | ConfidentialVault, ERC-7984 full standard + OZ Confidential Contracts, architecture decision table |
 | [08-anti-patterns.md](08-anti-patterns.md) | TFHE, missing ACL, ebool if/else, missing initSDK, old reencrypt API (v0.4.1), ethers v6 provider stale, vercel.json rewrite, Etherscan v2 |
 
