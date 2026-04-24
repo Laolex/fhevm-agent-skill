@@ -41,31 +41,46 @@ externalEaddress // wrap(bytes32)
 
 ## Multi-value input proof (single proof covers all handles from one encrypt() call)
 ```solidity
-// ✅ Two encrypted values, one proof
+// ✅ Two encrypted values, one proof.
+// Enum domain validation MUST be done via FHE.select on ebool — you cannot revert
+// on an encrypted predicate. Designate one branch as the "domain fallthrough"
+// so every encrypted value maps to exactly one tally and no weight is silently
+// discarded. (See 08-anti-patterns.md → "Silent-discard on out-of-range
+// encrypted enum" for the vulnerable counter-pattern.)
 function vote(
     bytes32 weightHandle,   // euint64
-    bytes32 voteHandle,     // euint8 — encrypted vote type
+    bytes32 voteHandle,     // euint8 — encrypted vote type (0=against, 1=for, else=abstain)
     bytes calldata inputProof
 ) external {
     euint64 weight   = FHE.fromExternal(externalEuint64.wrap(weightHandle), inputProof);
-    euint8  voteType = FHE.fromExternal(externalEuint8.wrap(voteHandle), inputProof);
+    euint8  voteType = FHE.fromExternal(externalEuint8.wrap(voteHandle),    inputProof);
 
+    // weight will flow to exactly one tally; voteType is not stored, so no ACL needed.
     FHE.allowThis(weight);
-    FHE.allowThis(voteType);
 
-    ebool isFor     = FHE.eq(voteType, FHE.asEuint8(1));
-    ebool isAgainst = FHE.eq(voteType, FHE.asEuint8(0));
-    euint64 zero    = FHE.asEuint64(0);
+    euint64 zero = FHE.asEuint64(0);
+    ebool isFor          = FHE.eq(voteType, FHE.asEuint8(1));
+    ebool isAgainst      = FHE.eq(voteType, FHE.asEuint8(0));
+    ebool isForOrAgainst = FHE.or(isFor, isAgainst);   // abstain = everything else
 
-    forVotes     = FHE.add(forVotes,     FHE.select(isFor,     weight, zero));
-    againstVotes = FHE.add(againstVotes, FHE.select(isAgainst, weight, zero));
+    euint64 forDelta     = FHE.select(isFor,          weight, zero);
+    euint64 againstDelta = FHE.select(isAgainst,      weight, zero);
+    euint64 abstainDelta = FHE.select(isForOrAgainst, zero,   weight);  // ✅ covers 2..255
+
+    forVotes     = FHE.add(forVotes,     forDelta);
+    againstVotes = FHE.add(againstVotes, againstDelta);
+    abstainVotes = FHE.add(abstainVotes, abstainDelta);
 
     FHE.allowThis(forVotes);
     FHE.allowThis(againstVotes);
+    FHE.allowThis(abstainVotes);
 }
 
-// Frontend: input.add64(weight); input.add8(voteType); — two values, one proof
+// Frontend: input.add64(weight); input.add8(voteType); — two values, one proof.
+// Invariant: forVotes + againstVotes + abstainVotes == sum of all accepted weights.
 ```
+
+**Rule — encrypted enum / branch domain validation:** when a user-supplied `euintN` drives a branch, you cannot `require` on an `ebool`. Compute `isValid = FHE.or(branchA, FHE.or(branchB, ...))` for the explicit branches, then make the remaining branch the negation: `FHE.select(isValid, zero, weight)`. Every input always lands somewhere, and `sum(tallies) == sum(weights)` holds by construction.
 
 ---
 

@@ -40,10 +40,13 @@ euint64 result = FHE.select(condition, valueIfTrue, valueIfFalse);
 
 ## ❌ Calling initFhevm() in frontend
 ```typescript
-import { initFhevm } from "@zama-fhe/relayer-sdk/web.js";
+import { initFhevm } from "@zama-fhe/relayer-sdk/bundle";
 await initFhevm();   // ❌ removed — causes "invalid EIP-1193 provider" error
 
-// ✅ Just call createInstance() directly
+// ✅ v0.4.x: call initSDK() once, then createInstance(SepoliaConfig)
+import { initSDK, createInstance, SepoliaConfig } from "@zama-fhe/relayer-sdk/bundle";
+await initSDK();
+const instance = await createInstance({ ...SepoliaConfig, network: window.ethereum });
 ```
 
 ## ❌ FHE.div with encrypted divisor
@@ -55,8 +58,8 @@ euint64 good = FHE.div(a, 2);   // ✅ divisor must be plaintext uint64
 
 ## ❌ Using fhevmjs package (deprecated)
 ```typescript
-import { createInstance } from "fhevmjs";                   // ❌ deprecated
-import { createInstance } from "@zama-fhe/relayer-sdk/web.js"; // ✅
+import { createInstance } from "fhevmjs";                      // ❌ deprecated
+import { createInstance } from "@zama-fhe/relayer-sdk/bundle"; // ✅ v0.4.x (use /bundle for Vite/Vercel SPAs)
 ```
 
 ## ❌ Old reencrypt() API (removed in SDK v0.4.1)
@@ -73,10 +76,9 @@ const plaintext = await fhevmInstance.reencrypt(                               /
 // ✅ SDK v0.4.1 — use userDecrypt with HandleContractPair[]
 const now = Math.floor(Date.now() / 1000);
 const eip712 = fhevmInstance.createEIP712(publicKey, [CONTRACT_ADDRESS], now, 1);  // ✅ array + timestamp + days
-const typeName = eip712.types.Reencrypt
-    ? "Reencrypt"
-    : Object.keys(eip712.types).find((k: string) => k !== "EIP712Domain")!;
-const sig = await signer.signTypedData(eip712.domain, { [typeName]: eip712.types[typeName] }, eip712.message);
+// ✅ Use eip712.primaryType — the SDK exposes it directly, do NOT guess type keys.
+const { primaryType } = eip712;
+const sig = await signer.signTypedData(eip712.domain, { [primaryType]: eip712.types[primaryType] }, eip712.message);
 const results = await fhevmInstance.userDecrypt(                                    // ✅ new API
     [{ handle: encHandle, contractAddress: CONTRACT_ADDRESS }],
     privateKey, publicKey, sig, [CONTRACT_ADDRESS], userAddress, now, 1,
@@ -314,9 +316,9 @@ import {AccessControlEnumerable} from "@openzeppelin/contracts/access/extensions
 contract Foo is AccessControlEnumerable { ... }
 ```
 
-## ❌ Proxy hardcoding request headers — drops ZAMA-SDK headers, FHE goes offline
+## ❌ Proxy header handling — either drops ZAMA-SDK headers OR leaks own-origin credentials
 ```javascript
-// ❌ Overriding headers drops ZAMA-SDK-VERSION and ZAMA-SDK-NAME
+// ❌ Option A: Overriding headers drops ZAMA-SDK-VERSION and ZAMA-SDK-NAME
 // Zama relayer REQUIRES these headers — without them it silently rejects and FHE init fails
 const response = await fetch(target, {
     method: req.method,
@@ -324,15 +326,33 @@ const response = await fetch(target, {
     body: ...,
 });
 
-// ✅ Forward original request headers, only stripping hop-by-hop headers
+// ❌ Option B: Forwarding everything-except-hop-by-hop leaks cookies/authorization/origin.
+// Any auth or session cookie set on YOUR Vercel domain gets forwarded to relayer.testnet.zama.org.
+// That's a credential leak out of your origin.
 const forwardHeaders = {};
 for (const [key, value] of req.headers.entries()) {
-    if (!['host', 'connection'].includes(key.toLowerCase())) {
-        forwardHeaders[key] = value;  // ✅ preserves ZAMA-SDK-VERSION, ZAMA-SDK-NAME, etc.
-    }
+    if (!['host', 'connection'].includes(key.toLowerCase())) forwardHeaders[key] = value; // ❌ leaks cookies
 }
-const response = await fetch(target, { method: req.method, headers: forwardHeaders, body: ... });
+
+// ✅ Use an explicit allow-list — only the headers the relayer actually needs.
+const FORWARD_REQ_HEADERS = new Set([
+    'content-type', 'accept', 'accept-encoding',
+    'x-zama-client', 'zama-sdk-version', 'zama-sdk-name',
+]);
+function filterRequestHeaders(src) {
+    const out = new Headers();
+    for (const [k, v] of src.entries()) {
+        if (FORWARD_REQ_HEADERS.has(k.toLowerCase())) out.set(k, v);
+    }
+    return out;
+}
+const response = await fetch(target, {
+    method: req.method,
+    headers: filterRequestHeaders(req.headers),  // ✅ preserves ZAMA-SDK-* but strips cookies/auth/origin
+    body: req.method !== 'GET' && req.method !== 'HEAD' ? req.body : undefined,
+});
 ```
+**Rule:** the proxy sits on your origin but relays to a third-party. Any header set by your own app (cookies, authorization, CSRF tokens) must be blocked explicitly. Allow-list > deny-list.
 
 ## ❌ Duplicate env var declarations without .trim() — ENS invalid name {0A}
 ```typescript
@@ -352,6 +372,72 @@ import { SCORE_CONTRACT_ADDRESS } from "./config"; // ✅ single source of truth
 // ❌ echo "0x..." | vercel env add ...   (adds \n)
 // ✅ printf '0x...' | vercel env add ...
 ```
+
+## ❌ HIGH: Silent-discard on out-of-range encrypted enum / branch value
+```solidity
+// Encrypted enum (voteType: 0=against, 1=for, 2=abstain, anything else = invalid)
+// ❌ VULNERABLE — if voteType is 3..255, the weight just vanishes. Caller loses voting
+//    power silently, accepted votes don't equal the sum of branch tallies, and a
+//    malicious UI could use this to nullify a user's weight without them noticing.
+function castVote(externalEuint64 encW, externalEuint8 encT, bytes calldata proof) external {
+    euint64 weight = FHE.fromExternal(encW, proof);
+    euint8  vt     = FHE.fromExternal(encT, proof);
+    forVotes     = FHE.add(forVotes,     FHE.select(FHE.eq(vt, FHE.asEuint8(1)), weight, FHE.asEuint64(0)));
+    againstVotes = FHE.add(againstVotes, FHE.select(FHE.eq(vt, FHE.asEuint8(0)), weight, FHE.asEuint64(0)));
+    abstainVotes = FHE.add(abstainVotes, FHE.select(FHE.eq(vt, FHE.asEuint8(2)), weight, FHE.asEuint64(0)));
+    //                                    ^^^ if vt ∉ {0,1,2}, weight goes nowhere
+}
+
+// ✅ CORRECT — compute "is this a valid domain value?" once and default the fallthrough bucket to it.
+//    Every vote is always counted in exactly one bucket, so sum(tallies) == sum(weights).
+function castVote(externalEuint64 encW, externalEuint8 encT, bytes calldata proof) external {
+    euint64 weight = FHE.fromExternal(encW, proof);
+    euint8  vt     = FHE.fromExternal(encT, proof);
+    euint64 zero   = FHE.asEuint64(0);
+
+    ebool isFor        = FHE.eq(vt, FHE.asEuint8(1));
+    ebool isAgainst    = FHE.eq(vt, FHE.asEuint8(0));
+    ebool isForOrAgainst = FHE.or(isFor, isAgainst);   // abstain = anything that isn't for/against
+
+    euint64 forDelta     = FHE.select(isFor,         weight, zero);
+    euint64 againstDelta = FHE.select(isAgainst,     weight, zero);
+    euint64 abstainDelta = FHE.select(isForOrAgainst, zero, weight);  // ✅ catches {2, 3, ..., 255}
+
+    forVotes     = FHE.add(forVotes,     forDelta);
+    againstVotes = FHE.add(againstVotes, againstDelta);
+    abstainVotes = FHE.add(abstainVotes, abstainDelta);
+}
+```
+**Rule:** encrypted enum validation cannot revert (the condition is an `ebool`). Instead, designate one bucket as the "domain fallthrough" and drive it via the negation of all other branches' union, so every encrypted branch value maps to exactly one tally.
+
+## ❌ Role-gating a VIEW that returns ciphertext handles
+```solidity
+// Handles are just 32-byte IDs. Without an ACL grant or a publishable-decrypt
+// event, knowing the handle buys the caller nothing — the ciphertext is still
+// KMS-guarded. Role-gating the VIEW is useless for privacy AND actively breaks
+// callers that need the handle to build a Pattern-3 `checkSignatures(handlesList, ...)` proof.
+//
+// ❌ VULNERABLE (to usability, not privacy) — frontend cannot pass handlesList
+//    to verifyTallyReveal because it can't read the current handles.
+function getEncryptedTallies()
+    external
+    view
+    onlyRole(ADMIN_ROLE)                                   // ❌ blocks the verify flow
+    returns (euint64, euint64, euint64)
+{
+    return (forVotes, againstVotes, abstainVotes);
+}
+
+// ✅ CORRECT — leave the view open. Privacy is enforced by ACL on the handles themselves,
+//    not by who can read the handle ID.
+function getEncryptedTallies() external view returns (euint64, euint64, euint64) {
+    // Handle IDs are public; only ACL grants (makePubliclyDecryptable / allow)
+    // expose the plaintext. Gating this view is theater — and it breaks the
+    // makePubliclyDecryptable → publicDecrypt → checkSignatures(handlesList) flow.
+    return (forVotes, againstVotes, abstainVotes);
+}
+```
+**Rule:** don't role-gate views returning `euintN` / `ebool` handles. If you want to restrict who can *decrypt* the data, restrict ACL (`FHE.allow` / `FHE.makePubliclyDecryptable`). If you want to restrict who can *trigger* the reveal, gate the state-changing `requestXxxReveal` function instead.
 
 ## ❌ Etherscan v2 API with hardhat-verify (Etherscan migrated, plugin broken)
 ```

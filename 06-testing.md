@@ -66,12 +66,12 @@ const { publicKey, privateKey } = fhevm.generateKeypair();
 const contractAddr = await contract.getAddress();
 const now = Math.floor(Date.now() / 1000);
 const eip712 = fhevm.createEIP712(publicKey, [contractAddr], now, 1);
-const typeName = eip712.types.Reencrypt
-  ? "Reencrypt"
-  : Object.keys(eip712.types).find((k: string) => k !== "EIP712Domain")!;
+// SDK v0.4.x exposes the active EIP-712 primaryType directly — don't guess at
+// type keys. `KmsUserDecryptEIP712Type.primaryType` is "UserDecryptRequestVerification".
+const { primaryType } = eip712;
 const sig = await user.signTypedData(
   eip712.domain,
-  { [typeName]: eip712.types[typeName] },
+  { [primaryType]: eip712.types[primaryType] },
   eip712.message,
 );
 const results = await fhevm.userDecrypt(

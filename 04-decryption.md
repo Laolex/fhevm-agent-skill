@@ -34,12 +34,12 @@ function getEncryptedSalary(address employee) external view returns (euint64) {
 **Frontend — single handle:**
 
 ```typescript
-import { createInstance } from "@zama-fhe/relayer-sdk/web.js";
+import { createInstance } from "@zama-fhe/relayer-sdk/bundle";
 
 const encHandle = await contract.getEncryptedSalary(userAddress);
 const { publicKey, privateKey } = fhevmInstance.generateKeypair();
 
-// ✅ SDK v0.4.1: createEIP712(pubKey, contractAddresses[], startTimestamp, durationDays)
+// ✅ SDK v0.4.x: createEIP712(pubKey, contractAddresses[], startTimestamp, durationDays)
 const now = Math.floor(Date.now() / 1000);
 const eip712 = fhevmInstance.createEIP712(
   publicKey,
@@ -48,13 +48,13 @@ const eip712 = fhevmInstance.createEIP712(
   1,
 );
 
-// ✅ Sign EIP-712 — type name may vary between SDK versions
-const typeName = eip712.types.Reencrypt
-  ? "Reencrypt"
-  : Object.keys(eip712.types).find((k: string) => k !== "EIP712Domain")!;
+// ✅ v0.4.x exposes eip712.primaryType ("UserDecryptRequestVerification").
+//    Do not guess with `types.Reencrypt ? ... : Object.keys(...)` — that silently signs
+//    a different struct on SDK upgrades and the KMS rejects with a cryptic error.
+const { primaryType } = eip712;
 const signature = await signer.signTypedData(
   eip712.domain,
-  { [typeName]: eip712.types[typeName] },
+  { [primaryType]: eip712.types[primaryType] },
   eip712.message,
 );
 
@@ -93,12 +93,10 @@ const eip712 = fhevmInstance.createEIP712(
   now,
   1,
 );
-const typeName = eip712.types.Reencrypt
-  ? "Reencrypt"
-  : Object.keys(eip712.types).find((k: string) => k !== "EIP712Domain")!;
+const { primaryType } = eip712;
 const sig = await signer.signTypedData(
   eip712.domain,
-  { [typeName]: eip712.types[typeName] },
+  { [primaryType]: eip712.types[primaryType] },
   eip712.message,
 );
 

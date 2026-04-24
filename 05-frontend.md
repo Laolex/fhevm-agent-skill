@@ -1,35 +1,43 @@
 ---
 name: fhevm-frontend
-description: fhEVM frontend integration — vendor bundle copy, createInstance config, createEncryptedInput (SDK v0.4.1), userDecrypt, publicDecrypt, ethers v6 provider fix, UI phase state machine, computation overlay, encrypted shimmer, CORS proxy, vite.config.ts
+description: fhEVM frontend integration — npm install relayer-sdk, createInstance config, createEncryptedInput (SDK v0.4.1), userDecrypt, publicDecrypt, ethers v6 provider fix, UI phase state machine, computation overlay, encrypted shimmer, CORS proxy, vite.config.ts
 type: reference
 ---
 
 # fhEVM — Frontend Integration
 
-## ⚠️ SDK vendor bundle — MUST copy manually
+## SDK install — use the npm package (do NOT vendor)
 
-The `@zama-fhe/relayer-sdk` package's `exports` map does NOT expose `./web.js` to Vite's resolver. Installing it via `npm install` in the frontend only gives a stripped/node version. The browser bundle (`web.js`, `web.d.ts`, `lib/`) **only exists in the Hardhat project's root `node_modules`**.
-
-**Correct approach — copy from root to frontend/src/vendor/:**
+`@zama-fhe/relayer-sdk@0.4.x` exposes two browser-compatible subpath exports via its
+`package.json` `"exports"` map: `./web` (lib + external WASM) and `./bundle`
+(self-contained, WASM inlined). Both resolve correctly under Vite and Next.js.
+**Prefer `./bundle` for Vite/Vercel SPAs** — it ships as a single file so you do
+not have to configure a separate WASM asset route.
 
 ```bash
-# Run from the frontend/ directory
-mkdir -p src/vendor/relayer-sdk
-cp -r ../node_modules/@zama-fhe/relayer-sdk/* src/vendor/relayer-sdk/
+# In the frontend/ directory
+npm install @zama-fhe/relayer-sdk@^0.4.1
 ```
-
-Then import from the local vendor path:
 
 ```typescript
 import {
   initSDK,
   createInstance,
   SepoliaConfig,
-} from "./vendor/relayer-sdk/web.js";
-import type { FhevmInstance } from "./vendor/relayer-sdk/web.js"; // ✅ import type from SDK — do NOT hand-roll
+  type FhevmInstance,
+} from "@zama-fhe/relayer-sdk/bundle";
 ```
 
-> **gitignore**: Add `frontend/src/vendor/` to `.gitignore` (contains 4.7MB WASM files) and document the copy step in README.
+> **Anti-pattern:** copying the SDK into `frontend/src/vendor/` and importing from
+> a relative path. Earlier versions of this skill taught that pattern because
+> `/web.js` was not exported — that is no longer true as of v0.4.x. Vendoring
+> ships a frozen ~12 MB copy with no security/bug-fix path, bloats the repo,
+> and makes the TS types go stale.
+
+> **If you see import errors in Vite**, add
+> `optimizeDeps: { exclude: ["@zama-fhe/relayer-sdk"] }` to `vite.config.ts`
+> (shown below). The SDK ships its own WASM loader and does not like Vite's
+> dev-time dep prebundling.
 
 ## createInstance — use SepoliaConfig spread (production pattern)
 
@@ -38,9 +46,8 @@ import {
   initSDK,
   createInstance,
   SepoliaConfig,
-} from "./vendor/relayer-sdk/web.js";
-import type { FhevmInstance } from "./vendor/relayer-sdk/web.js";
-// Note: use vendor copy for Vite projects — /web.js subpath not exported by npm package
+  type FhevmInstance,
+} from "@zama-fhe/relayer-sdk/bundle";
 
 // ✅ PRODUCTION: spread SepoliaConfig — all addresses stay in sync with SDK releases
 // SepoliaConfig includes: aclContractAddress, kmsContractAddress, inputVerifierContractAddress,
@@ -48,11 +55,11 @@ import type { FhevmInstance } from "./vendor/relayer-sdk/web.js";
 const provider = new ethers.BrowserProvider(window.ethereum);
 const eth = provider.provider; // raw EIP-1193 provider
 
-const fhevmInstance = (await createInstance({
+const fhevmInstance = await createInstance({
   ...SepoliaConfig, // ✅ baked-in correct addresses
   relayerUrl: "https://yourdomain.vercel.app/api/zama-relay", // your CORS proxy
   network: eth, // EIP-1193 provider
-})) as unknown as FhevmInstance; // ✅ must use `as unknown as FhevmInstance` — types don't overlap otherwise
+}); // returns FhevmInstance directly when imported from /bundle
 
 // ✅ vs hardcoding addresses manually — only use hardcoded form if SDK doesn't export SepoliaConfig
 // ❌ Do NOT call initFhevm() — removed, causes "invalid EIP-1193 provider" error
@@ -115,14 +122,13 @@ const eip712 = fhevmInstance.createEIP712(
   now,
   1,
 );
-// ⚠️ eip712.types is typed strictly — cast first to access dynamic key
-const types = eip712.types as Record<string, unknown>;
-const typeName = types["Reencrypt"]
-  ? "Reencrypt"
-  : Object.keys(eip712.types).find((k: string) => k !== "EIP712Domain")!;
+// ✅ v0.4.x: use eip712.primaryType — stable, typed as "UserDecryptRequestVerification".
+// ❌ Do NOT guess with `types.Reencrypt ? "Reencrypt" : Object.keys(...)` —
+//    it silently signs the wrong struct and the KMS rejects it with a cryptic error.
+const { primaryType } = eip712;
 const signature = await signer.signTypedData(
   eip712.domain,
-  { [typeName]: (types as any)[typeName] },
+  { [primaryType]: eip712.types[primaryType] },
   eip712.message,
 );
 
@@ -163,12 +169,36 @@ await contract.verifyTallyReveal(
 
 The Zama relayer doesn't send CORS/CORP headers. When your site uses `Cross-Origin-Embedder-Policy: require-corp` (needed for WASM), ALL cross-origin fetches are blocked unless proxied through same-origin.
 
-**Critical bug to avoid**: hardcoding `content-type: application/json` on proxy requests. The Zama relayer SDK sends `ZAMA-SDK-VERSION` and `ZAMA-SDK-NAME` headers — if your proxy drops them by overriding headers, the relayer rejects the request silently and `createInstance` fails with FHE showing offline.
+**Two critical bugs to avoid**:
+
+1. Hardcoding `content-type: application/json` on proxy requests. The Zama relayer SDK sends `ZAMA-SDK-VERSION` and `ZAMA-SDK-NAME` headers — if your proxy drops them by overriding headers, the relayer rejects the request silently and `createInstance` fails with FHE showing offline.
+2. Forwarding *all* request headers (e.g. `req.headers` verbatim, or a deny-list that only strips `host`/`connection`). This forwards browser cookies and any `Authorization` set on your own origin out to `relayer.testnet.zama.org`. **Use an allow-list, not a deny-list.**
 
 ```javascript
 // api/zama-relay.js — Vercel edge function
-// ✅ Forwards original request headers (ZAMA-SDK-VERSION, ZAMA-SDK-NAME, content-type, etc.)
+// ✅ Allow-list only forwards headers the Zama relayer needs
 export const config = { runtime: "edge" };
+
+const RELAYER_ORIGIN = "https://relayer.testnet.zama.org";
+
+// Everything not in this set is dropped — no cookie/authorization leakage.
+const FORWARD_REQ_HEADERS = new Set([
+  "content-type",
+  "accept",
+  "accept-encoding",
+  "x-zama-client",
+  "zama-sdk-version",
+  "zama-sdk-name",
+]);
+
+function filterRequestHeaders(src) {
+  const out = new Headers();
+  for (const [k, v] of src.entries()) {
+    if (FORWARD_REQ_HEADERS.has(k.toLowerCase())) out.set(k, v);
+  }
+  return out;
+}
+
 export default async function handler(req) {
   if (req.method === "OPTIONS") {
     return new Response(null, {
@@ -184,20 +214,11 @@ export default async function handler(req) {
   const url = new URL(req.url);
   // ✅ Anchor the replace and fallback to '/' — prevents double-replace bugs
   const path = url.pathname.replace(/^\/api\/zama-relay/, "") || "/";
-  const target = `https://relayer.testnet.zama.org${path}${url.search}`;
-
-  // ✅ Forward original headers — MUST include ZAMA-SDK-VERSION and ZAMA-SDK-NAME
-  // ❌ DO NOT override with { 'content-type': 'application/json' } — drops SDK headers
-  const forwardHeaders = {};
-  for (const [key, value] of req.headers.entries()) {
-    if (!["host", "connection"].includes(key.toLowerCase())) {
-      forwardHeaders[key] = value;
-    }
-  }
+  const target = `${RELAYER_ORIGIN}${path}${url.search}`;
 
   const response = await fetch(target, {
     method: req.method,
-    headers: forwardHeaders,
+    headers: filterRequestHeaders(req.headers),
     body: req.method !== "GET" && req.method !== "HEAD" ? req.body : undefined,
   });
 
@@ -286,18 +307,39 @@ try {
 
 ## Sepolia network enforcement before FHE init
 
+`wallet_switchEthereumChain` throws with `code: 4902` when the wallet has never seen the chain — common on fresh MetaMask profiles. Always have an `addEthereumChain` fallback or the connect button will just break for new users.
+
 ```typescript
-// ✅ Always enforce correct network before connecting — prevents "wrong network" errors
-async function connect() {
-    const provider = new ethers.BrowserProvider(window.ethereum);
-    const network  = await provider.getNetwork();
-    if (Number(network.chainId) !== CHAIN_ID) {
-        await provider.send("wallet_switchEthereumChain", [
-            { chainId: `0x${CHAIN_ID.toString(16)}` }
-        ]);
+const SEPOLIA_ADD_PARAMS = {
+  chainId: `0x${(11155111).toString(16)}`,
+  chainName: "Sepolia",
+  nativeCurrency: { name: "Sepolia Ether", symbol: "ETH", decimals: 18 },
+  rpcUrls: ["https://sepolia.infura.io/v3/", "https://rpc.sepolia.org"],
+  blockExplorerUrls: ["https://sepolia.etherscan.io"],
+};
+
+async function ensureSepolia(eth: any) {
+  try {
+    await eth.request({
+      method: "wallet_switchEthereumChain",
+      params: [{ chainId: `0x${CHAIN_ID.toString(16)}` }],
+    });
+  } catch (err: any) {
+    if (err?.code === 4902 || /unrecognized chain/i.test(String(err?.message ?? ""))) {
+      await eth.request({
+        method: "wallet_addEthereumChain",
+        params: [SEPOLIA_ADD_PARAMS],
+      });
+    } else {
+      throw err;
     }
-    // Now safe to init FHE
-    inst = await Promise.race([...]);
+  }
+}
+
+// Inside connect():
+if (Number(network.chainId) !== CHAIN_ID) {
+  await ensureSepolia(window.ethereum);
+  provider = new ethers.BrowserProvider(window.ethereum); // re-create; see ethers v6 note below
 }
 ```
 

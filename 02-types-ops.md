@@ -192,3 +192,22 @@ uint64 max ≈ 18.4 × 10^18 wei ≈ 18.4 ETH
 | `FHE.checkSignatures` | 120k | |
 
 **Design guidelines:** batch ACL grants at function end; prefer `FHE.shr` over `FHE.div`; avoid chaining >3-4 FHE ops per function (gas hits 1-2M).
+
+## Don't `allowThis` throwaway intermediates
+Only grant ACL on handles the contract will actually re-read in a later transaction, return to the user, or pass across a contract boundary. Intermediate handles that are consumed within the same call (predicates, scratch deltas, branch selectors) never need `allowThis` — each unnecessary grant costs ~30k gas.
+
+```solidity
+// ❌ Wasteful — voteType is never stored or reused; FHE.eq reads it synchronously.
+euint8 voteType = FHE.fromExternal(externalEuint8.wrap(handle), inputProof);
+FHE.allowThis(voteType);                                // ❌ 30k wasted
+ebool isFor = FHE.eq(voteType, FHE.asEuint8(1));
+
+// ✅ Only the stored tallies + the weight (which may flow into storage) need ACL.
+euint64 weight   = FHE.fromExternal(externalEuint64.wrap(wh), inputProof);
+euint8  voteType = FHE.fromExternal(externalEuint8.wrap(vh),  inputProof);
+FHE.allowThis(weight);                                   // may end up in storage
+// no allowThis on voteType — consumed in this call only
+ebool isFor = FHE.eq(voteType, FHE.asEuint8(1));
+// ... then allowThis on the updated tallies at the end.
+```
+**Rule of thumb:** does this handle appear on the LHS of a storage assignment, get returned, or get passed to another contract? If not, skip the `allowThis`.

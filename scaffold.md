@@ -59,6 +59,25 @@ If user hasn't specified a use case and is building for Season 2, suggest one of
 
 ## Step 2 — Generate Solidity contract
 
+### 2a. MANDATORY pre-write checklist (read before writing a single line of contract code)
+
+The scaffold templates below cover common mechanics but cannot anticipate every spec. Before writing the contract, cross-reference the spec against these five domain-correctness rules. Each one corresponds to a real bug observed in production fhEVM code — if you skip them, you will reproduce those bugs.
+
+1. **Encrypted enum / branch domain validation** — does any function dispatch on an encrypted `euintN` (vote type, action type, asset kind)? If yes, you cannot `require` on an `ebool`. Designate one branch as the domain fallthrough and drive it via the negation of the other branches' union, so every input lands in exactly one bucket. See `03-input-acl.md` → "Multi-value input proof" and `08-anti-patterns.md` → "Silent-discard on out-of-range encrypted enum". **Invariant to state in a test:** `sum(tallies) == sum(accepted_weights)`.
+2. **Pattern 3 verify-reveal handle pinning** — if you expose `verifyXxxReveal(bytes32[] handlesList, ...)`, the caller controls `handlesList`. `FHE.checkSignatures` does NOT bind handles to slots. Every callback MUST `require(handlesList[i] == FHE.toBytes32(expected_i))` for every `i` before calling `checkSignatures`. See `08-anti-patterns.md` → "Not pinning handles in checkSignatures".
+3. **Don't role-gate VIEWS that return ciphertext handles** — handles are public IDs, not plaintext. Gating the view doesn't buy privacy (ACL does) but actively breaks callers that need the handle to build a verify proof. Role-gate the state-changing `requestXxxReveal` instead. See `08-anti-patterns.md` → "Role-gating a VIEW that returns ciphertext handles".
+4. **Binary-search leak via callable encrypted predicate** — any function that returns `ebool` of `FHE.ge(secret, caller_supplied_threshold)` with `FHE.allow(result, msg.sender)` is a decryption oracle. Gate by subject-or-role, not open. See `08-anti-patterns.md` → "Binary-search leak".
+5. **User-supplied encrypted "equivalent" clamping** — if a user encrypts a value meant to represent a plaintext-derivable quantity (token→ETH conversion, collateral credit), clamp via `FHE.select(lt(encCap, encIn), encCap, encIn)` against an oracle-derived plaintext cap. Otherwise users over-report freely. See `08-anti-patterns.md` → "Trusting user-supplied encrypted equivalent".
+
+Also apply these gas/ACL hygiene rules from `02-types-ops.md`:
+- Only `FHE.allowThis` values that will survive the current call (storage LHS, return value, or cross-contract arg). Skip it on scratch predicates/deltas (~30k saved per grant).
+- Prefer `FHE.shr` over `FHE.div` for powers of two.
+- Use the floor-at-zero form for `FHE.sub` (no `FHE.gte` in v0.11 — use `FHE.not(FHE.lt(a, b))`).
+
+If the spec mentions multi-branch encrypted dispatch (voting, asset type, action kind), write and commit to rule 1 BEFORE writing the function body. If the spec mentions liquidation/close/reveal with Pattern 3, write and commit to rule 2 BEFORE writing `verifyXxxReveal`. Do not fold these in as afterthoughts.
+
+### 2b. Write the contract
+
 Write the full contract to `contracts/<ContractName>.sol` following these rules:
 
 **Imports (always):**
@@ -66,7 +85,7 @@ Write the full contract to `contracts/<ContractName>.sol` following these rules:
 ```solidity
 pragma solidity ^0.8.24;
 import {FHE, euint64, ebool, externalEuint64} from "@fhevm/solidity/lib/FHE.sol";
-import {ZamaEthereumConfig} from "./ZamaConfig.sol";   // local copy
+import {ZamaEthereumConfig} from "@fhevm/solidity/config/ZamaConfig.sol";   // npm — do NOT copy locally
 import {AccessControlEnumerable} from "@openzeppelin/contracts/access/extensions/AccessControlEnumerable.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import {Pausable} from "@openzeppelin/contracts/utils/Pausable.sol";
@@ -197,12 +216,11 @@ describe("<ContractName>", function () {
     const contractAddr = await contract.getAddress();
     const now = Math.floor(Date.now() / 1000);
     const eip712 = fhevm.createEIP712(publicKey, [contractAddr], now, 1);
-    const typeName = eip712.types.Reencrypt
-      ? "Reencrypt"
-      : Object.keys(eip712.types).find((k: string) => k !== "EIP712Domain")!;
+    // SDK v0.4.x exposes the active EIP-712 primaryType directly; don't guess type keys.
+    const { primaryType } = eip712;
     const sig = await user.signTypedData(
       eip712.domain,
-      { [typeName]: eip712.types[typeName] },
+      { [primaryType]: eip712.types[primaryType] },
       eip712.message,
     );
     const results = await fhevm.userDecrypt(
@@ -230,14 +248,15 @@ Cover at minimum: deposit, borrow/action, userDecrypt, reveal flow, role checks.
 Write `scripts/deploy.ts`:
 
 ```typescript
-import { ethers } from "hardhat";
+import { ethers, network, run } from "hardhat";
 
 async function main() {
   const [deployer] = await ethers.getSigners();
   console.log("Deployer:", deployer.address);
 
   const Factory = await ethers.getContractFactory("<ContractName>");
-  const contract = await Factory.deploy();
+  // If the constructor takes an admin, pass deployer.address (or whatever the spec requires).
+  const contract = await Factory.deploy(/* <constructor args, if any> */);
   await contract.waitForDeployment();
   const addr = await contract.getAddress();
   console.log("<ContractName>:", addr);
@@ -248,6 +267,28 @@ async function main() {
 
   console.log("\nUpdate frontend/src/config.ts:");
   console.log(`  CONTRACT_ADDRESS = "${addr}"`);
+
+  // ─── Auto-verify on Etherscan (skip on local networks) ────────────────────
+  if (network.name !== "hardhat" && network.name !== "localhost") {
+    console.log("\nWaiting for Etherscan indexing (30s)...");
+    await new Promise((r) => setTimeout(r, 30_000));
+
+    try {
+      await run("verify:verify", {
+        address: addr,
+        constructorArguments: [/* same args as deploy */],
+      });
+      console.log("Etherscan verification submitted");
+    } catch (err: any) {
+      const msg = String(err?.message ?? err);
+      if (/already verified/i.test(msg)) {
+        console.log("Already verified on Etherscan");
+      } else {
+        // Non-fatal — verification can be retried manually
+        console.warn("Etherscan verify failed (non-fatal):", msg);
+      }
+    }
+  }
 }
 
 main().catch((e) => {
@@ -255,6 +296,8 @@ main().catch((e) => {
   process.exit(1);
 });
 ```
+
+Requires `@nomicfoundation/hardhat-verify` and an `ETHERSCAN_API_KEY` in `hardhat.config.ts`. Keep `constructorArguments` in sync with the deploy `.deploy(...)` call — mismatches are the #1 cause of verify failure.
 
 ---
 
@@ -276,6 +319,7 @@ Write ALL of the following files (not just a snippet — a complete working app)
     "preview": "vite preview"
   },
   "dependencies": {
+    "@zama-fhe/relayer-sdk": "^0.4.1",
     "ethers": "^6.13.5",
     "react": "^18.3.1",
     "react-dom": "^18.3.1"
@@ -290,7 +334,7 @@ Write ALL of the following files (not just a snippet — a complete working app)
 }
 ```
 
-Note: do NOT put @zama-fhe/relayer-sdk in package.json — it ships as a vendor bundle.
+Note: install `@zama-fhe/relayer-sdk` from npm and import from `@zama-fhe/relayer-sdk/bundle` (self-contained WASM bundle that works out of the box on Vite/Vercel). Do NOT vendor-copy the SDK — earlier skill revisions recommended that, but v0.4.x exports `./bundle` and `./web` subpaths cleanly. Keep `optimizeDeps.exclude` below so Vite leaves the WASM bundle alone.
 
 ### `frontend/vite.config.ts`
 
@@ -333,6 +377,29 @@ export default defineConfig({
 
 ```javascript
 export const config = { runtime: "edge" };
+
+const RELAYER_ORIGIN = "https://relayer.testnet.zama.org";
+
+// Allow-list: only the request headers the relayer actually needs. Anything set
+// on our own origin (cookie, authorization, host, origin, referer, user-agent)
+// is dropped so the proxy never leaks credentials to the third-party relayer.
+const FORWARD_REQ_HEADERS = new Set([
+  "content-type",
+  "accept",
+  "accept-encoding",
+  "x-zama-client",
+  "zama-sdk-version",
+  "zama-sdk-name",
+]);
+
+function filterRequestHeaders(src) {
+  const out = new Headers();
+  for (const [k, v] of src.entries()) {
+    if (FORWARD_REQ_HEADERS.has(k.toLowerCase())) out.set(k, v);
+  }
+  return out;
+}
+
 export default async function handler(req) {
   if (req.method === "OPTIONS") {
     return new Response(null, {
@@ -344,26 +411,33 @@ export default async function handler(req) {
       },
     });
   }
+
   const url = new URL(req.url);
-  const path = url.pathname.replace("/api/zama-relay", "");
-  const target = `https://relayer.testnet.zama.org${path}${url.search ?? ""}`;
+  const path = url.pathname.replace(/^\/api\/zama-relay/, "") || "/";
+  const target = `${RELAYER_ORIGIN}${path}${url.search ?? ""}`;
+
   const response = await fetch(target, {
     method: req.method,
-    headers: { "content-type": "application/json" },
+    headers: filterRequestHeaders(req.headers),  // ✅ preserves ZAMA-SDK-* but strips cookies/auth
     body: req.method !== "GET" && req.method !== "HEAD" ? req.body : undefined,
   });
+
   // ✅ Forward actual content-type — binary endpoints MUST use arrayBuffer
   const contentType =
     response.headers.get("content-type") ?? "application/octet-stream";
   const data =
-    contentType.includes("octet-stream") || contentType.includes("binary")
+    contentType.includes("application/octet-stream") ||
+    contentType.includes("binary")
       ? await response.arrayBuffer()
       : await response.text();
+
   return new Response(data, {
     status: response.status,
     headers: {
       "Access-Control-Allow-Origin": "*",
       "content-type": contentType,
+      "ZAMA-SDK-VERSION": response.headers.get("ZAMA-SDK-VERSION") ?? "",
+      "ZAMA-SDK-NAME": response.headers.get("ZAMA-SDK-NAME") ?? "",
     },
   });
 }
@@ -405,17 +479,21 @@ export const CONTRACT_ADDRESS = "<deployed-address-or-placeholder>";
 export const CHAIN_ID = 11155111; // Sepolia
 ```
 
-### `frontend/src/vendor/` (IMPORTANT)
+### SDK install (IMPORTANT — use npm, NOT vendor-copy)
 
-Do NOT import @zama-fhe/relayer-sdk from npm. The SDK ships as a vendored bundle.
-Tell the user:
+Install the relayer SDK directly from npm — the package's `./bundle` and `./web` subpath exports are supported in v0.4.x, so no vendor-copy is needed:
 
-```
-Copy the vendor bundle from an existing fhEVM project:
-  cp -r <existing-fhevm-project>/frontend/src/vendor frontend/src/vendor
+```bash
+cd frontend && npm install @zama-fhe/relayer-sdk@^0.4.1
 ```
 
-Then import as: `import { initSDK, createInstance, SepoliaConfig } from "./vendor/relayer-sdk/web.js";`
+Import the `/bundle` entrypoint everywhere (self-contained WASM, works under Vite/Vercel without extra config):
+
+```typescript
+import { initSDK, createInstance, SepoliaConfig, type FhevmInstance } from "@zama-fhe/relayer-sdk/bundle";
+```
+
+If you need the tree-shakeable variant (advanced — requires manual WASM asset hosting), use `@zama-fhe/relayer-sdk/web` instead. Do NOT copy `src/vendor/` from another project; older skill revisions recommended that, but the npm package now publishes a drop-in bundle.
 
 ### `frontend/src/App.tsx`
 
@@ -423,26 +501,56 @@ Write a complete React component:
 
 ```typescript
 import { BrowserProvider, Contract } from "ethers";
-import { initSDK, createInstance, SepoliaConfig } from "./vendor/relayer-sdk/web.js";
+import { initSDK, createInstance, SepoliaConfig, type FhevmInstance } from "@zama-fhe/relayer-sdk/bundle";
 import { useState } from "react";
 import ABI from "./abi.json";
 import { CONTRACT_ADDRESS, CHAIN_ID } from "./config";
 
+// Params used by wallet_addEthereumChain when the user's wallet doesn't know about Sepolia.
+// Without this, calling wallet_switchEthereumChain throws error 4902 and leaves the user stuck.
+const SEPOLIA_ADD_PARAMS = {
+  chainId: "0xaa36a7",
+  chainName: "Sepolia",
+  nativeCurrency: { name: "Sepolia Ether", symbol: "SEP", decimals: 18 },
+  rpcUrls: ["https://rpc.sepolia.org"],
+  blockExplorerUrls: ["https://sepolia.etherscan.io"],
+} as const;
+
+// Switch the wallet to Sepolia; if the wallet doesn't know it (error 4902), add it first.
+async function ensureSepolia(eth: any): Promise<void> {
+  try {
+    await eth.request({
+      method: "wallet_switchEthereumChain",
+      params: [{ chainId: SEPOLIA_ADD_PARAMS.chainId }],
+    });
+  } catch (err: any) {
+    if (err?.code === 4902) {
+      await eth.request({ method: "wallet_addEthereumChain", params: [SEPOLIA_ADD_PARAMS] });
+    } else {
+      throw err;
+    }
+  }
+}
+
 export default function App() {
   const [account, setAccount] = useState<string | null>(null);
   const [contract, setContract] = useState<Contract | null>(null);
-  const [fhevmInst, setFhevmInst] = useState<any>(null);
+  const [fhevmInst, setFhevmInst] = useState<FhevmInstance | null>(null);
   const [loading, setLoading] = useState(false);
   const [status, setStatus] = useState("");
 
   const connect = async () => {
     const eth = (window as any).ethereum;
     if (!eth) { setStatus("No wallet found"); return; }
-    const provider = new BrowserProvider(eth);
+
+    // Resolve chain BEFORE constructing BrowserProvider — ethers v6 caches chainId
+    // and will throw NETWORK_ERROR if the chain changes after provider construction.
+    let provider = new BrowserProvider(eth);
     await provider.send("eth_requestAccounts", []);
     const network = await provider.getNetwork();
     if (Number(network.chainId) !== CHAIN_ID) {
-      await provider.send("wallet_switchEthereumChain", [{ chainId: `0x${CHAIN_ID.toString(16)}` }]);
+      await ensureSepolia(eth);
+      provider = new BrowserProvider(eth);   // re-create after chain switch
     }
     const signer = await provider.getSigner();
     const addr = await signer.getAddress();
@@ -516,14 +624,11 @@ Files written:
   frontend/src/App.tsx                — full React app
   frontend/src/config.ts
 
-⚠️  Manual step required:
-  cp -r <existing-fhevm-project>/frontend/src/vendor frontend/src/vendor
-
 Next steps:
   1. npx hardhat compile && npx hardhat test
   2. npx hardhat run scripts/deploy.ts --network sepolia
   3. Update frontend/src/config.ts with deployed address
-  4. cd frontend && npm install && npm run build
+  4. cd frontend && npm install && npm run build   # installs @zama-fhe/relayer-sdk
   5. Push to GitHub → connect Vercel → deploy
 ```
 
