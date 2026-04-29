@@ -40,11 +40,11 @@ euint64 result = FHE.select(condition, valueIfTrue, valueIfFalse);
 
 ## ❌ Calling initFhevm() in frontend
 ```typescript
-import { initFhevm } from "@zama-fhe/relayer-sdk/bundle";
+import { initFhevm } from "@zama-fhe/relayer-sdk/web";
 await initFhevm();   // ❌ removed — causes "invalid EIP-1193 provider" error
 
 // ✅ v0.4.x: call initSDK() once, then createInstance(SepoliaConfig)
-import { initSDK, createInstance, SepoliaConfig } from "@zama-fhe/relayer-sdk/bundle";
+import { initSDK, createInstance, SepoliaConfig } from "@zama-fhe/relayer-sdk/web";
 await initSDK();
 const instance = await createInstance({ ...SepoliaConfig, network: window.ethereum });
 ```
@@ -59,7 +59,7 @@ euint64 good = FHE.div(a, 2);   // ✅ divisor must be plaintext uint64
 ## ❌ Using fhevmjs package (deprecated)
 ```typescript
 import { createInstance } from "fhevmjs";                      // ❌ deprecated
-import { createInstance } from "@zama-fhe/relayer-sdk/bundle"; // ✅ v0.4.x (use /bundle for Vite/Vercel SPAs)
+import { createInstance } from "@zama-fhe/relayer-sdk/web"; // ✅ v0.4.x — use /web for Vite/Next.js (NOT /bundle; see below)
 ```
 
 ## ❌ Old reencrypt() API (removed in SDK v0.4.1)
@@ -449,4 +449,61 @@ npx hardhat verify --network sepolia 0xAddress
 // 2. Extract .input field: python3 -c "import json,sys; print(json.dumps(json.load(open('artifacts/build-info/<hash>.json'))['input'], indent=2))" > std_input.json
 // 3. Upload at https://sepolia.etherscan.io/verifyContract
 //    Settings: Solidity (Standard-Json-Input), compiler 0.8.24, 200 runs, EVM cancun
+```
+
+## ❌ CSP without explicit `script-src 'unsafe-eval'` — blank white page on load
+The Zama relayer SDK runs runtime code evaluation to instantiate its WASM glue *at module-import time*. If your CSP omits an explicit `script-src` directive (or has one without `'unsafe-eval'`), the import throws synchronously during the first `<script type="module">` evaluation, React never mounts, and the user sees a fully blank page with only a CSP eval-blocked warning in the console.
+
+```json
+// ❌ default-src alone — browsers do NOT fall back to it for the eval check
+"Content-Security-Policy": "default-src 'self' 'unsafe-eval' ..."
+
+// ✅ script-src must be explicit, and must include both 'unsafe-eval' and 'wasm-unsafe-eval'
+"Content-Security-Policy": "default-src 'self' 'unsafe-inline' 'unsafe-eval' 'wasm-unsafe-eval' blob: data: https:; script-src 'self' 'unsafe-inline' 'unsafe-eval' 'wasm-unsafe-eval' blob: data: https:; script-src-elem 'self' 'unsafe-inline' blob: data: https:; connect-src 'self' https: wss: blob: data:; worker-src 'self' blob:; img-src 'self' data: https:;"
+```
+**Apply the same CSP in BOTH `vite.config.ts` `server.headers` AND `vercel.json` `headers`** — dev-only CSP means localhost renders but the production deploy still white-pages. Symptom signature: blank page, no React DOM, console shows *"The Content Security Policy (CSP) prevents the evaluation of arbitrary strings as JavaScript ... script-src blocked"*.
+
+## ❌ Importing `@zama-fhe/relayer-sdk/bundle` in Vite/Next.js — module-load TypeError + blank page
+The package exports two browser entries: `/web` (proper ESM) and `/bundle` (UMD wrapper for `<script>` tag inclusion). Bundlers like Vite, Next.js, and Webpack run `/bundle` as ESM and the UMD wrapper's IIFE references a global that doesn't exist:
+
+```
+Uncaught TypeError: Cannot read properties of undefined (reading 'initSDK')
+    at bundle.js:1:42
+```
+
+This throws at module load, so React never mounts — you see a blank white page with this error in the console.
+
+```typescript
+// ❌ UMD entry — only works for <script src="..."> in static HTML
+import { initSDK, createInstance, SepoliaConfig } from "@zama-fhe/relayer-sdk/bundle";
+
+// ✅ ESM entry — use this for Vite, Next.js, Vue, any modern bundler
+import { initSDK, createInstance, SepoliaConfig } from "@zama-fhe/relayer-sdk/web";
+```
+
+`/web` resolves the WASM via Vite's asset handling automatically when paired with `optimizeDeps: { exclude: ["@zama-fhe/relayer-sdk"] }`.
+
+## ❌ Chain-add handler matching only error code 4902
+EIP-3326 says wallets SHOULD return error code `4902` for "unrecognized chain ID", but many do not. MetaMask follows the spec. Brave Wallet, Tally Ho, Pelagus, and several mobile wallets surface it as JSON-RPC code `-32603` (internal error) with the literal text `Unrecognized chain ID "0x..."` in the message. A 4902-only handler leaves users on those wallets stuck with a thrown error and no auto-add.
+
+```typescript
+// ❌ MetaMask-only — other wallets bypass this branch
+if (err?.code === 4902) {
+  await eth.request({ method: "wallet_addEthereumChain", params: [CHAIN_PARAMS] });
+}
+
+// ✅ Match the message text too — covers every wallet observed in the wild
+const msg = String(err?.message ?? "");
+const unrecognized =
+  err?.code === 4902 ||
+  err?.code === -32603 ||
+  /unrecognized chain/i.test(msg);
+if (unrecognized) {
+  await eth.request({ method: "wallet_addEthereumChain", params: [CHAIN_PARAMS] });
+  // Some wallets add but don't switch — call switch again to be safe
+  await eth.request({
+    method: "wallet_switchEthereumChain",
+    params: [{ chainId: CHAIN_PARAMS.chainId }],
+  });
+}
 ```

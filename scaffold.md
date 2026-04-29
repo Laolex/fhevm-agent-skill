@@ -334,7 +334,7 @@ Write ALL of the following files (not just a snippet — a complete working app)
 }
 ```
 
-Note: install `@zama-fhe/relayer-sdk` from npm and import from `@zama-fhe/relayer-sdk/bundle` (self-contained WASM bundle that works out of the box on Vite/Vercel). Do NOT vendor-copy the SDK — earlier skill revisions recommended that, but v0.4.x exports `./bundle` and `./web` subpaths cleanly. Keep `optimizeDeps.exclude` below so Vite leaves the WASM bundle alone.
+Note: install `@zama-fhe/relayer-sdk` from npm and import from `@zama-fhe/relayer-sdk/web` — the proper ESM entry. Do NOT use `@zama-fhe/relayer-sdk/bundle` in a Vite/Next.js app — it is a UMD wrapper for `<script>` includes and fails at module load with `Cannot read properties of undefined (reading 'initSDK')`, leaving you with a blank page. Do NOT vendor-copy the SDK either; v0.4.x exports the `./web` subpath cleanly. Keep `optimizeDeps.exclude` below so Vite leaves the WASM bundle alone.
 
 ### `frontend/vite.config.ts`
 
@@ -348,6 +348,12 @@ export default defineConfig({
     headers: {
       "Cross-Origin-Opener-Policy": "same-origin",
       "Cross-Origin-Embedder-Policy": "require-corp",
+      // ✅ REQUIRED — relayer SDK uses runtime code evaluation for WASM glue
+      // at module-load time. Without explicit script-src 'unsafe-eval', the
+      // import throws and React never mounts → blank white page. default-src
+      // does NOT cover the eval check; script-src must be explicit.
+      "Content-Security-Policy":
+        "default-src 'self' 'unsafe-inline' 'unsafe-eval' 'wasm-unsafe-eval' blob: data: https:; script-src 'self' 'unsafe-inline' 'unsafe-eval' 'wasm-unsafe-eval' blob: data: https:; script-src-elem 'self' 'unsafe-inline' blob: data: https:; connect-src 'self' https: wss: blob: data:; worker-src 'self' blob:; img-src 'self' data: https:;",
     },
   },
   optimizeDeps: { exclude: ["@zama-fhe/relayer-sdk"] },
@@ -363,7 +369,11 @@ export default defineConfig({
       "source": "/(.*)",
       "headers": [
         { "key": "Cross-Origin-Opener-Policy", "value": "same-origin" },
-        { "key": "Cross-Origin-Embedder-Policy", "value": "require-corp" }
+        { "key": "Cross-Origin-Embedder-Policy", "value": "require-corp" },
+        {
+          "key": "Content-Security-Policy",
+          "value": "default-src 'self' 'unsafe-inline' 'unsafe-eval' 'wasm-unsafe-eval' blob: data: https:; script-src 'self' 'unsafe-inline' 'unsafe-eval' 'wasm-unsafe-eval' blob: data: https:; script-src-elem 'self' 'unsafe-inline' blob: data: https:; connect-src 'self' https: wss: blob: data:; worker-src 'self' blob:; img-src 'self' data: https:;"
+        }
       ]
     }
   ],
@@ -487,13 +497,13 @@ Install the relayer SDK directly from npm — the package's `./bundle` and `./we
 cd frontend && npm install @zama-fhe/relayer-sdk@^0.4.1
 ```
 
-Import the `/bundle` entrypoint everywhere (self-contained WASM, works under Vite/Vercel without extra config):
+Import the `/web` entrypoint everywhere (proper ESM — the right entry for Vite, Next.js, and any modern bundler):
 
 ```typescript
-import { initSDK, createInstance, SepoliaConfig, type FhevmInstance } from "@zama-fhe/relayer-sdk/bundle";
+import { initSDK, createInstance, SepoliaConfig, type FhevmInstance } from "@zama-fhe/relayer-sdk/web";
 ```
 
-If you need the tree-shakeable variant (advanced — requires manual WASM asset hosting), use `@zama-fhe/relayer-sdk/web` instead. Do NOT copy `src/vendor/` from another project; older skill revisions recommended that, but the npm package now publishes a drop-in bundle.
+Do NOT use `@zama-fhe/relayer-sdk/bundle` here. `/bundle` is a UMD wrapper for static `<script>` tag inclusion only; under Vite/Next.js it fails at module load with `Cannot read properties of undefined (reading 'initSDK')` and the page goes blank. Do NOT copy `src/vendor/` from another project either — the npm package now publishes the `/web` ESM entry directly.
 
 ### `frontend/src/App.tsx`
 
@@ -501,7 +511,7 @@ Write a complete React component:
 
 ```typescript
 import { BrowserProvider, Contract } from "ethers";
-import { initSDK, createInstance, SepoliaConfig, type FhevmInstance } from "@zama-fhe/relayer-sdk/bundle";
+import { initSDK, createInstance, SepoliaConfig, type FhevmInstance } from "@zama-fhe/relayer-sdk/web";
 import { useState } from "react";
 import ABI from "./abi.json";
 import { CONTRACT_ADDRESS, CHAIN_ID } from "./config";
@@ -516,7 +526,9 @@ const SEPOLIA_ADD_PARAMS = {
   blockExplorerUrls: ["https://sepolia.etherscan.io"],
 } as const;
 
-// Switch the wallet to Sepolia; if the wallet doesn't know it (error 4902), add it first.
+// Switch the wallet to Sepolia; if the wallet doesn't know it, add it first.
+// MetaMask uses code 4902 for "unrecognized chain", but other wallets (Brave/Tally/Pelagus)
+// surface it as -32603 with "Unrecognized chain ID" in the message. Match all three.
 async function ensureSepolia(eth: any): Promise<void> {
   try {
     await eth.request({
@@ -524,8 +536,17 @@ async function ensureSepolia(eth: any): Promise<void> {
       params: [{ chainId: SEPOLIA_ADD_PARAMS.chainId }],
     });
   } catch (err: any) {
-    if (err?.code === 4902) {
+    const msg = String(err?.message ?? "");
+    const unrecognized =
+      err?.code === 4902 ||
+      err?.code === -32603 ||
+      /unrecognized chain/i.test(msg);
+    if (unrecognized) {
       await eth.request({ method: "wallet_addEthereumChain", params: [SEPOLIA_ADD_PARAMS] });
+      await eth.request({
+        method: "wallet_switchEthereumChain",
+        params: [{ chainId: SEPOLIA_ADD_PARAMS.chainId }],
+      });
     } else {
       throw err;
     }

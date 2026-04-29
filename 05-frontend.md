@@ -8,11 +8,15 @@ type: reference
 
 ## SDK install — use the npm package (do NOT vendor)
 
-`@zama-fhe/relayer-sdk@0.4.x` exposes two browser-compatible subpath exports via its
-`package.json` `"exports"` map: `./web` (lib + external WASM) and `./bundle`
-(self-contained, WASM inlined). Both resolve correctly under Vite and Next.js.
-**Prefer `./bundle` for Vite/Vercel SPAs** — it ships as a single file so you do
-not have to configure a separate WASM asset route.
+`@zama-fhe/relayer-sdk@0.4.x` exposes two browser subpath exports via its
+`package.json` `"exports"` map: `./web` (proper ESM, what Vite/Next.js bundle)
+and `./bundle` (UMD wrapper meant for `<script>` tag inclusion).
+
+**Always use `./web` for Vite, Next.js, or any ESM build.** The `./bundle`
+entry expects a global UMD context — when imported via ESM it fails at module
+load with `Cannot read properties of undefined (reading 'initSDK')` and React
+never mounts (blank white page). `./bundle` is only correct for plain
+`<script src="...">` includes in static HTML.
 
 ```bash
 # In the frontend/ directory
@@ -25,7 +29,7 @@ import {
   createInstance,
   SepoliaConfig,
   type FhevmInstance,
-} from "@zama-fhe/relayer-sdk/bundle";
+} from "@zama-fhe/relayer-sdk/web";
 ```
 
 > **Anti-pattern:** copying the SDK into `frontend/src/vendor/` and importing from
@@ -47,7 +51,7 @@ import {
   createInstance,
   SepoliaConfig,
   type FhevmInstance,
-} from "@zama-fhe/relayer-sdk/bundle";
+} from "@zama-fhe/relayer-sdk/web";
 
 // ✅ PRODUCTION: spread SepoliaConfig — all addresses stay in sync with SDK releases
 // SepoliaConfig includes: aclContractAddress, kmsContractAddress, inputVerifierContractAddress,
@@ -265,6 +269,12 @@ export default defineConfig({
     headers: {
       "Cross-Origin-Opener-Policy": "same-origin",
       "Cross-Origin-Embedder-Policy": "require-corp",
+      // ✅ REQUIRED: relayer SDK uses runtime code evaluation for WASM glue at
+      // module load time. Without explicit script-src + 'unsafe-eval', the
+      // import throws and React never mounts → blank white page on first load.
+      // default-src does NOT cover the eval check — script-src must be explicit.
+      "Content-Security-Policy":
+        "default-src 'self' 'unsafe-inline' 'unsafe-eval' 'wasm-unsafe-eval' blob: data: https:; script-src 'self' 'unsafe-inline' 'unsafe-eval' 'wasm-unsafe-eval' blob: data: https:; script-src-elem 'self' 'unsafe-inline' blob: data: https:; connect-src 'self' https: wss: blob: data:; worker-src 'self' blob:; img-src 'self' data: https:;",
     },
   },
   optimizeDeps: {
@@ -272,6 +282,8 @@ export default defineConfig({
   },
 });
 ```
+
+Mirror the same CSP in `vercel.json` `headers` for the production deploy — dev-only CSP means localhost works but the deployed site still white-pages.
 
 ## Init pattern with proxy + fallback
 

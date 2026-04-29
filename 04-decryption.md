@@ -34,7 +34,7 @@ function getEncryptedSalary(address employee) external view returns (euint64) {
 **Frontend — single handle:**
 
 ```typescript
-import { createInstance } from "@zama-fhe/relayer-sdk/bundle";
+import { createInstance } from "@zama-fhe/relayer-sdk/web";
 
 const encHandle = await contract.getEncryptedSalary(userAddress);
 const { publicKey, privateKey } = fhevmInstance.generateKeypair();
