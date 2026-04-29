@@ -507,3 +507,27 @@ if (unrecognized) {
   });
 }
 ```
+
+## ❌ Decoding multi-handle `cleartexts` as a dynamic array (`uintN[]`)
+The relayer SDK's `publicDecrypt(handles)` returns `abiEncodedClearValues` as a **flat tuple of N uint256 words** — one per handle — NOT as a Solidity `uintN[]` dynamic array (which carries an offset + length prefix). Decoding with `abi.decode(cleartexts, (uint32[]))` succeeds silently but yields a zero-length array, so any `require(decoded.length == N)` reverts with a confusing `"Bad cleartext count"`-style error.
+
+```solidity
+// ❌ Wrong — uint32[] expects [offset(32) | length(32) | values...] layout.
+// SDK gives [val0(32) | val1(32) | ...] with no prefix → decode yields length=0.
+uint32[] memory decoded = abi.decode(cleartexts, (uint32[]));
+require(decoded.length == p.tallies.length, "Bad cleartext count");
+
+// ✅ Correct — parse N raw 32-byte words manually
+uint256 n = p.tallies.length;
+require(cleartexts.length == n * 32, "Bad cleartext length");
+uint32[] memory decoded = new uint32[](n);
+for (uint256 i = 0; i < n; i++) {
+    uint256 word;
+    uint256 offset = i * 32;
+    assembly {
+        word := calldataload(add(cleartexts.offset, offset))
+    }
+    decoded[i] = uint32(word);  // downcast to slot type
+}
+```
+**Single-handle decode (`abi.decode(cleartexts, (uint64))`, `(bool)`, `(address)`) is fine** because one word matches one tuple element exactly. The bug only manifests when N ≥ 2 handles are decrypted in one call. The frontend MUST pass `result.abiEncodedClearValues` verbatim — re-encoding the values yourself invalidates the KMS signature (selector `0x6475522d` = `InvalidKMSSignatures`).

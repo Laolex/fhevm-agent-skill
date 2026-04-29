@@ -160,7 +160,12 @@ const plaintext = Object.values(results)[0] as bigint;
 const handles = await contract.getEncryptedTallies(proposalId); // bytes32[]
 const result = await fhevmInstance.publicDecrypt(handles);
 
-// Pass abiEncodedClearValues + decryptionProof to the contract verifier
+// ⚠️ Pass abiEncodedClearValues VERBATIM. The KMS signed exactly these bytes;
+// re-encoding them (even into the "right" Solidity type) invalidates the
+// signature → InvalidKMSSignatures (selector 0x6475522d) at FHE.checkSignatures.
+// Companion contract gotcha: the SDK encodes N handles as a flat tuple of N
+// uint256 words — NOT a uintN[] dynamic array. See 08-anti-patterns.md →
+// "Decoding multi-handle cleartexts as a dynamic array".
 await contract.verifyTallyReveal(
   proposalId,
   handles,
