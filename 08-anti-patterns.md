@@ -129,24 +129,30 @@ cts[0] = Gateway.toUint256(encryptedTally);        // ❌ wrong method
 Gateway.requestDecryption(cts, selector, 0, deadline, false); // ❌ wrong function
 function cb(uint256 id, uint64 result) public onlyGateway {}  // ❌ wrong signature
 
-// ✅ CORRECT
-bytes32[] memory cts = new bytes32[](1);
-cts[0] = FHE.toBytes32(encryptedTally);
-FHE.requestDecryption(cts, this.cb.selector);
-function cb(uint256 id, bytes memory cleartexts, bytes memory proof) external {
-    FHE.checkSignatures(id, cleartexts, proof);
+// ✅ CORRECT — Pattern 3 (the only public-decrypt path in @fhevm/solidity@0.11.x)
+//   Note: FHE.requestDecryption is NOT present in this stack. Use Pattern 3.
+function requestReveal() external {
+    FHE.makePubliclyDecryptable(encryptedTally);
+    pendingReveal = true;
+}
+function verifyReveal(bytes32[] calldata handles, bytes calldata cleartexts, bytes calldata proof) external {
+    require(pendingReveal, "no pending reveal");
+    require(handles.length == 1 && handles[0] == FHE.toBytes32(encryptedTally), "handle mismatch");
+    FHE.checkSignatures(handles, cleartexts, proof);
     (uint64 result) = abi.decode(cleartexts, (uint64));
+    pendingReveal = false;
 }
 ```
 
 ## ❌ Missing FHE.checkSignatures in decryption callbacks
 ```solidity
-function onRevealCallback(uint256 requestId, bytes memory cleartexts, bytes memory proof) external {
+function verifyReveal(bytes32[] calldata handles, bytes calldata cleartexts, bytes calldata proof) external {
     // ❌ Skipping checkSignatures — anyone can forge a decryption result
     (uint64 result) = abi.decode(cleartexts, (uint64));
 
-    // ✅ Always verify first
-    FHE.checkSignatures(requestId, cleartexts, proof);
+    // ✅ Always verify first (Pattern 3 array form — only form in @fhevm/solidity@0.11.x)
+    require(handles[0] == FHE.toBytes32(expectedHandle), "handle mismatch"); // pin BEFORE check
+    FHE.checkSignatures(handles, cleartexts, proof);
     (uint64 result) = abi.decode(cleartexts, (uint64));
 }
 ```
@@ -181,7 +187,7 @@ function verifyAndClose(bytes32[] calldata handlesList, bytes calldata cleartext
     _close(msg.sender);
 }
 ```
-**Rule:** every Pattern-3 `FHE.checkSignatures(bytes32[], bytes, bytes)` callback MUST `require(handlesList[i] == FHE.toBytes32(expected_i))` for every `i` before calling `checkSignatures`. Pattern 2 (`FHE.requestDecryption` with requestId) is safe — the coprocessor binds the request.
+**Rule:** every Pattern-3 `FHE.checkSignatures(bytes32[], bytes, bytes)` callback MUST `require(handlesList[i] == FHE.toBytes32(expected_i))` for every `i` before calling `checkSignatures`. Pattern 3 is the only on-chain public-decrypt path in `@fhevm/solidity@0.11.x` — there is no `FHE.requestDecryption` (requestId-bound) variant.
 
 ## ❌ CRITICAL: Trusting user-supplied encrypted "equivalent" without a plaintext clamp
 ```solidity

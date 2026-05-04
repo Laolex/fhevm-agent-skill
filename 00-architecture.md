@@ -19,8 +19,9 @@ The core insight: operations run on ciphertext, not plaintext. The chain never s
 ```
 User Browser
 │
-│  encryptUint({ value, contractAddress, callerAddress })
-│  → encrypted handle + ZK input proof
+│  createEncryptedInput(contractAddress, callerAddress)
+│    .add64(value).encrypt()
+│  → { handles: [...], inputProof }
 │
 ▼
 Smart Contract (Sepolia)
@@ -64,7 +65,7 @@ When a user provides an encrypted value to a contract, they must also submit a Z
 1. The value is within the valid range for the type
 2. The value was encrypted specifically for this contract+caller pair (prevents replay)
 
-This is why `contractAddress` and `callerAddress` are required in `encryptUint()`.
+This is why `contractAddress` and `callerAddress` are required when calling `createEncryptedInput(contractAddress, callerAddress)`.
 
 ### Coprocessor execution model
 FHE operations are NOT executed synchronously in the EVM. The EVM emits an event, the coprocessor picks it up, executes the operation in the TEE, and the result is available in the next block (or same block depending on implementation). This is why:
@@ -88,27 +89,16 @@ These are baked into `SepoliaConfig` — do not hardcode them manually.
 
 ---
 
-## ZamaConfig.sol — local copy pattern
+## Config inheritance — npm import (canonical)
 
-Contracts must inherit the correct config for their network. Always copy `ZamaConfig.sol` locally to avoid dependency issues:
+Contracts must inherit `SepoliaConfig` (Sepolia) or `ZamaEthereumConfig` (mainnet) from the npm package. Do NOT copy `ZamaConfig.sol` locally — it pins addresses to a release and drifts from SDK updates.
 
 ```solidity
-// contracts/ZamaConfig.sol — copy from node_modules, rename if needed
-// SPDX-License-Identifier: BSD-3-Clause-Clear
-pragma solidity ^0.8.24;
+import {SepoliaConfig} from "@fhevm/solidity/config/ZamaConfig.sol";
 
-import {ZamaFHEVMConfig} from "@fhevm/solidity/config/ZamaConfig.sol";
-
-abstract contract SepoliaZamaFHEVMConfig is ZamaFHEVMConfig {
-    constructor() {
-        // Sepolia addresses baked in by ZamaFHEVMConfig
-    }
+contract MyContract is SepoliaConfig, AccessControl, ReentrancyGuard {
+    // SepoliaConfig sets coprocessor addresses (ACL, KMS, InputVerifier, FHEVM, Decryption Oracle)
 }
-```
-
-```solidity
-// Your contract
-contract MyContract is SepoliaZamaFHEVMConfig, AccessControl, ReentrancyGuard {
 ```
 
 ---
@@ -117,9 +107,10 @@ contract MyContract is SepoliaZamaFHEVMConfig, AccessControl, ReentrancyGuard {
 
 | Pattern | When to use | How |
 |---------|-------------|-----|
-| **Re-encryption** | User reads their own private data | EIP-712 sign → KMS re-encrypts under user key → user decrypts locally |
-| **Oracle callback** | Public result after event (auction end, vote close) | `FHE.requestDecryption()` → coprocessor decrypts → callback function |
-| **Public decrypt** | Admin/liquidation reveals a specific value | `FHE.makePubliclyDecryptable()` → `FHE.checkSignatures()` → plaintext on-chain |
+| **userDecrypt** (Pattern 1) | User reads their own private data | EIP-712 sign → KMS re-encrypts under user key → user decrypts locally |
+| **Public decrypt** (Pattern 3) | Public result after event (vote close, liquidation flag, auction end) | `FHE.makePubliclyDecryptable()` → relayer publicDecrypt → on-chain `FHE.checkSignatures(handlesList, ...)` with handle pinning |
+
+> Note: `FHE.requestDecryption` (Gateway-style oracle callback) is **not present** in `@fhevm/solidity@0.11.x`. Use Pattern 3 for any "publicly readable after event" use case.
 
 ---
 

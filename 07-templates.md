@@ -154,13 +154,11 @@ await (await usdc.approve(CONFIDENTIAL_USDC_ADDRESS, rawAmount)).wait();
 const wrapper = new Contract(CONFIDENTIAL_USDC_ADDRESS, cUSDC_ABI, signer);
 await wrapper.wrap(rawAmount);
 
-// 3. Confidential transfer — amount hidden
-const encrypted = await fhevmInst.encryptUint({
-    value: BigInt(transferAmount),
-    type: "euint64",
-    contractAddress: CONFIDENTIAL_USDC_ADDRESS,
-    callerAddress: userAddress,
-});
+// 3. Confidential transfer — amount hidden (createEncryptedInput builder)
+const encrypted = await fhevmInst
+    .createEncryptedInput(CONFIDENTIAL_USDC_ADDRESS, userAddress)
+    .add64(BigInt(transferAmount))
+    .encrypt();
 await wrapper.confidentialTransfer(
     recipientAddress,
     ethers.hexlify(encrypted.handles[0]),
@@ -203,7 +201,7 @@ Note: Hackathon rewards (cUSDT) are paid in ERC-7984. Building ERC-7984-compatib
 | Need | Pattern |
 |------|---------|
 | User sees only their own data | User decrypt (`fhevmInstance.userDecrypt`) |
-| Public result after deadline | FHE oracle (`FHE.requestDecryption` + callback) |
+| Public result after deadline | Pattern 3 (`FHE.makePubliclyDecryptable` + verifyReveal with `FHE.checkSignatures`) |
 | Conditional logic without leaking branch | `FHE.select(condition, a, b)` |
 | Token with private balances | ERC-7984 (`ERC7984ERC20Wrapper`) |
 | Custom encrypted state | `euint64` mappings + ACL grants |
@@ -224,7 +222,7 @@ Note: Hackathon rewards (cUSDT) are paid in ERC-7984. Building ERC-7984-compatib
 Full overcollateralized lending protocol with multi-asset cross-collateral, credit score integration, and 3-step liquidation.
 
 **Key patterns:**
-- `ZamaEthereumConfig` (local copy) + `AccessControlEnumerable` + `ReentrancyGuard` + `Pausable`
+- `ZamaEthereumConfig` (npm import from `@fhevm/solidity/config/ZamaConfig.sol`) + `AccessControlEnumerable` + `ReentrancyGuard` + `Pausable`
 - `SafeERC20` for all ERC20 transfers
 - `_applyCollateral()` — init-or-add encrypted accumulator (see 03-input-acl.md)
 - `_computeHealthFactor()` — score-gated tiered `FHE.select` ratio

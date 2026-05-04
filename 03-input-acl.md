@@ -11,7 +11,7 @@ type: reference
 ```solidity
 // ✅ Correct pattern
 function deposit(
-    bytes32 inputHandle,      // encrypted value handle from frontend encryptUint()
+    bytes32 inputHandle,      // encrypted handle from frontend createEncryptedInput().add64().encrypt()
     bytes calldata inputProof // ZK proof that value is valid
 ) external payable {
     euint64 encAmount = FHE.fromExternal(
@@ -231,13 +231,11 @@ const ethWeiEquiv = (rawAmount * token.ethWeiPerToken) / (10n ** BigInt(token.de
 const erc20 = new Contract(token.address, ERC20_ABI, signer);
 await (await erc20.approve(CONTRACT_ADDRESS, rawAmount)).wait();
 
-// 2. Encrypt ETH-wei equivalent
-const encrypted = await fhevmInstance.encryptUint({
-    value: ethWeiEquiv,
-    type: "euint64",
-    contractAddress: CONTRACT_ADDRESS,
-    callerAddress: userAddress,
-});
+// 2. Encrypt ETH-wei equivalent (createEncryptedInput builder — SDK v0.4.x)
+const encrypted = await fhevmInstance
+    .createEncryptedInput(CONTRACT_ADDRESS, userAddress)
+    .add64(ethWeiEquiv)
+    .encrypt();
 const handle = ethers.hexlify(encrypted.handles[0]);
 const proof  = ethers.hexlify(encrypted.inputProof);
 

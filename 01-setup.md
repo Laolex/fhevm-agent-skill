@@ -67,10 +67,6 @@ import {eaddress} from "@fhevm/solidity/lib/FHE.sol";
 import {externalEuint8, externalEuint16, externalEuint32, externalEuint64} from "@fhevm/solidity/lib/FHE.sol";
 import {SepoliaConfig, ZamaEthereumConfig} from "@fhevm/solidity/config/ZamaConfig.sol";
 
-// ✅ For multi-contract projects — copy ZamaConfig.sol locally to avoid import path issues
-// contracts/ZamaConfig.sol (copy from node_modules/@fhevm/solidity/config/ZamaConfig.sol)
-import {ZamaEthereumConfig} from "./ZamaConfig.sol";
-
 // ❌ WRONG — old API, do not use
 import "fhevm/lib/TFHE.sol";
 import {TFHE} from "fhevm/lib/TFHE.sol";
@@ -89,7 +85,8 @@ contract MyConfidentialContract is SepoliaConfig, AccessControl {
 // ✅ For Ethereum mainnet
 contract MyContract is ZamaEthereumConfig, AccessControl {}
 
-// ✅ No extra inheritance needed for public decryption — FHE.requestDecryption is built in
+// ✅ No extra inheritance needed for public decryption — Pattern 3
+//    (FHE.makePubliclyDecryptable + FHE.checkSignatures) is built into FHE library
 contract MyVotingContract is SepoliaConfig {}
 
 // ✅ Production lending pattern — full OpenZeppelin stack

@@ -24,7 +24,7 @@ This skill turns AI coding assistants (Claude Code, Cursor, Windsurf, GitHub Cop
 | `01-setup` | Hardhat config, `vars()`, multi-contract deploy, ZamaConfig patterns |
 | `02-types-ops` | All encrypted types (`euint8`–`euint128`, `ebool`, `eaddress`), FHE operations, gas costs |
 | `03-input-acl` | `FHE.fromExternal` proofs, `allowTransient`, multi-role ACL patterns |
-| `04-decryption` | `userDecrypt` (v0.4.1 batch API), `requestDecryption` oracle, `makePubliclyDecryptable` |
+| `04-decryption` | `userDecrypt` (v0.4.1 batch API), `makePubliclyDecryptable` + `checkSignatures` Pattern 3 (with handle pinning) |
 | `05-frontend` | `initSDK` + `SepoliaConfig`, relayer SDK, ethers v6 provider fix, Zustand state machine, CORS proxy |
 | `06-testing` | Mock coprocessor, `createEncryptedInput`, `publicDecryptEbool`, callback testing |
 | `07-templates` | ConfidentialVault, ERC-7984 standard, OpenZeppelin Confidential Contracts |
@@ -126,7 +126,7 @@ The `SKILL.md` entry point acts as a router: it reads the user's intent and load
 - Encrypted types: `euint8`, `euint16`, `euint32`, `euint64`, `euint128`, `ebool`, `eaddress`
 - All FHE operations: arithmetic, comparison, bitwise, shifts, select, min/max
 - ACL: `allowThis`, `allow`, `allowTransient`, `makePubliclyDecryptable`
-- Decryption: `userDecrypt` (batch), `requestDecryption` (oracle), public decrypt
+- Decryption: `userDecrypt` (batch, Pattern 1), `makePubliclyDecryptable` + `checkSignatures` (Pattern 3 with handle pinning). `FHE.requestDecryption` is not present in `@fhevm/solidity@0.11.x` — use Pattern 3 for public reveal flows.
 - ERC-7984 confidential token standard
 - OpenZeppelin Confidential Contracts
 - Hardhat + mock coprocessor testing

@@ -159,7 +159,15 @@ function requestReveal(address subject) external {
 }
 // Step 2
 function verifyReveal(address subject, bytes32[] calldata handles, bytes calldata cleartexts, bytes calldata proof) external {
-    require(pendingReveal[subject]);
+    require(pendingReveal[subject], "no pending reveal");
+
+    // 🔒 CRITICAL: pin handlesList BEFORE checkSignatures.
+    // checkSignatures only attests "KMS signed these handles decrypt to these cleartexts" —
+    // it does NOT bind handles to slots. Without this require, an attacker can substitute
+    // any KMS-signed (handle, cleartext) pair from any contract to forge the result.
+    require(handles.length == 1, "bad handles length");
+    require(handles[0] == FHE.toBytes32(positions[subject].flag), "handle mismatch");
+
     FHE.checkSignatures(handles, cleartexts, proof);
     bool result = abi.decode(cleartexts, (bool));
     delete pendingReveal[subject];
@@ -268,26 +276,21 @@ async function main() {
   console.log("\nUpdate frontend/src/config.ts:");
   console.log(`  CONTRACT_ADDRESS = "${addr}"`);
 
-  // ─── Auto-verify on Etherscan (skip on local networks) ────────────────────
+  // ─── Etherscan verification ───────────────────────────────────────────────
+  // ⚠️ DO NOT auto-run `hardhat verify`: as of late 2025, Etherscan migrated to
+  //    its v2 API and `@nomicfoundation/hardhat-verify` ≤ 2.1.3 still posts to
+  //    the deprecated v1 endpoint, returning "Invalid API Key" or
+  //    "deprecated V1" errors. See 08-anti-patterns.md.
+  //
+  // Use the manual standard-input flow instead:
+  //   1. npx hardhat compile
+  //   2. cat artifacts/build-info/*.json | jq '.input' > std_input.json
+  //   3. Upload std_input.json on Etherscan's "Verify & Publish" page
+  //      (Compiler type: Solidity Standard JSON Input).
   if (network.name !== "hardhat" && network.name !== "localhost") {
-    console.log("\nWaiting for Etherscan indexing (30s)...");
-    await new Promise((r) => setTimeout(r, 30_000));
-
-    try {
-      await run("verify:verify", {
-        address: addr,
-        constructorArguments: [/* same args as deploy */],
-      });
-      console.log("Etherscan verification submitted");
-    } catch (err: any) {
-      const msg = String(err?.message ?? err);
-      if (/already verified/i.test(msg)) {
-        console.log("Already verified on Etherscan");
-      } else {
-        // Non-fatal — verification can be retried manually
-        console.warn("Etherscan verify failed (non-fatal):", msg);
-      }
-    }
+    console.log("\nNext step — verify on Etherscan manually:");
+    console.log("  cat artifacts/build-info/*.json | jq '.input' > std_input.json");
+    console.log(`  Upload at https://sepolia.etherscan.io/verifyContract?a=${addr}`);
   }
 }
 
@@ -297,7 +300,7 @@ main().catch((e) => {
 });
 ```
 
-Requires `@nomicfoundation/hardhat-verify` and an `ETHERSCAN_API_KEY` in `hardhat.config.ts`. Keep `constructorArguments` in sync with the deploy `.deploy(...)` call — mismatches are the #1 cause of verify failure.
+Etherscan verification: use the manual `std_input.json` upload (Standard JSON Input). Auto `hardhat verify` is unreliable post-Etherscan-v2 migration — see `08-anti-patterns.md`.
 
 ---
 
@@ -594,8 +597,12 @@ export default function App() {
     setStatus(inst ? "FHE online" : "FHE offline — read-only mode");
   };
 
-  // ── Add action handlers here using encryptUint / userDecrypt ────────────────
-  // See scaffold pattern below for encrypt/send/decrypt flows
+  // ── Add action handlers using createEncryptedInput / userDecrypt ──────────
+  //   Encrypt:  await fhevmInst
+  //               .createEncryptedInput(CONTRACT_ADDRESS, addr)
+  //               .add64(BigInt(amount))   // .add8/.add16/.add32/.addBool per type
+  //               .encrypt();
+  //   Decrypt:  see 04-decryption.md for userDecrypt EIP-712 flow
 
   return (
     <div style={{ fontFamily: "monospace", padding: 32, maxWidth: 600, margin: "0 auto" }}>
@@ -619,7 +626,7 @@ export default function App() {
 Customize the JSX to expose the contract's main functions (deposit, borrow, etc.) with:
 
 - Input fields for amounts
-- Encrypt → send flow using `fhevmInst.encryptUint`
+- Encrypt → send flow using `fhevmInst.createEncryptedInput(contract, caller).addNN(value).encrypt()`
 - Decrypt → display flow using `fhevmInst.userDecrypt`
 - Loading states and error display
 

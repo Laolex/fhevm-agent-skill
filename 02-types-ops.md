@@ -56,9 +56,9 @@ euint64 bad = FHE.div(a, b);
 ebool isEqual   = FHE.eq(a, b);
 ebool notEqual  = FHE.ne(a, b);
 ebool isGreater = FHE.gt(a, b);
-ebool isGte     = FHE.gte(a, b);
 ebool isLess    = FHE.lt(a, b);
 ebool isLte     = FHE.lte(a, b);
+// ⚠️ No FHE.gte / FHE.lte symmetry in v0.11 — see "Floor-at-zero subtraction" below for gte via not+lt
 ```
 
 ## Boolean operations
@@ -98,7 +98,7 @@ euint64 larger  = FHE.max(a, b);
 ## Floor-at-zero subtraction (prevent underflow)
 ```solidity
 // FHE.sub wraps on underflow — use select to clamp
-euint64 result = FHE.select(FHE.gte(a, b), FHE.sub(a, b), FHE.asEuint64(0));
+euint64 result = FHE.select(FHE.not(FHE.lt(a, b)), FHE.sub(a, b), FHE.asEuint64(0));
 // Alternative: FHE.max(FHE.sub(a, b), FHE.asEuint64(0))
 ```
 
@@ -124,8 +124,8 @@ euint8  back  = FHE.asEuint8(big);     // downcast — truncates high bits
 euint64 ratio = FHE.asEuint64(150); // default
 
 if (address(scoreContract) != address(0) && scoreContract.hasScore(borrower)) {
-    ebool isPremium  = scoreContract.meetsThreshold(borrower, 800); // euint64 >= 800
-    ebool isStandard = scoreContract.meetsThreshold(borrower, 600); // euint64 >= 600
+    ebool isPremium  = scoreContract.meetsThreshold(borrower, 800); // score not(lt) 800 inside contract
+    ebool isStandard = scoreContract.meetsThreshold(borrower, 600); // score not(lt) 600 inside contract
 
     // premium → 110%, standard → 130%, else → 150%
     ratio = FHE.select(isPremium,
@@ -188,8 +188,7 @@ uint64 max ≈ 18.4 × 10^18 wei ≈ 18.4 ETH
 | `FHE.allowThis` | 30k | |
 | `FHE.allow(val, addr)` | 30k | |
 | `FHE.makePubliclyDecryptable` | 40k | |
-| `FHE.requestDecryption` | 80k | |
-| `FHE.checkSignatures` | 120k | |
+| `FHE.checkSignatures` | 120k | array form: `(bytes32[], bytes, bytes)` — Pattern 3 |
 
 **Design guidelines:** batch ACL grants at function end; prefer `FHE.shr` over `FHE.div`; avoid chaining >3-4 FHE ops per function (gas hits 1-2M).
 

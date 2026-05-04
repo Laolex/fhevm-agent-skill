@@ -1,6 +1,6 @@
 ---
 name: fhevm-migrate
-description: Agentic command — migrate an fhEVM contract from old TFHE.* API / GatewayCaller pattern to current FHE.* API (v0.9+). Rewrites imports, function calls, inheritance, callback signatures, and hardhat config in one pass.
+description: Agentic command — migrate an fhEVM contract from old TFHE.* API / GatewayCaller pattern to current FHE.* API (@fhevm/solidity v0.11.x). Rewrites imports, function calls, inheritance, decryption pattern (Pattern 3 only), and frontend SDK usage in one pass.
 type: command
 trigger: /fhevm migrate
 ---
@@ -8,6 +8,8 @@ trigger: /fhevm migrate
 # /fhevm migrate — TFHE → FHE API Migration
 
 You are an fhEVM migration agent. When invoked, read the target contract(s), apply every transformation below in a single pass, and write the result back. Do not ask for confirmation between steps — read, transform, write, then show a diff summary.
+
+**Target stack:** `@fhevm/solidity@^0.11.1`, `@fhevm/hardhat-plugin@^0.4.x`, `@zama-fhe/relayer-sdk@^0.4.1`.
 
 ---
 
@@ -28,19 +30,20 @@ Read all files before transforming.
 |---|---|
 | `import "fhevm/lib/TFHE.sol";` | `import {FHE, euint64, ebool, externalEuint64} from "@fhevm/solidity/lib/FHE.sol";` |
 | `import {TFHE} from "fhevm/lib/TFHE.sol";` | same as above |
-| `import {SepoliaZamaFHEVMConfig} from "@fhevm/solidity/config/ZamaFHEVMConfig.sol";` | `import {ZamaEthereumConfig} from "./ZamaConfig.sol";` |
+| `import {SepoliaZamaFHEVMConfig} from "@fhevm/solidity/config/ZamaFHEVMConfig.sol";` | `import {SepoliaConfig} from "@fhevm/solidity/config/ZamaConfig.sol";` |
 | `import {SepoliaZamaGatewayConfig} from "@fhevm/solidity/config/ZamaGatewayConfig.sol";` | (remove) |
 | `import {GatewayCaller} from "@fhevm/solidity/gateway/GatewayCaller.sol";` | (remove) |
 | `import {Gateway} from "@fhevm/solidity/gateway/lib/Gateway.sol";` | (remove) |
-| `import {SepoliaConfig} from "@fhevm/solidity/config/ZamaConfig.sol";` | `import {ZamaEthereumConfig} from "./ZamaConfig.sol";` |
+| Any local `import {...} from "./ZamaConfig.sol";` | `import {SepoliaConfig} from "@fhevm/solidity/config/ZamaConfig.sol";` (npm canonical — do NOT vendor a local copy) |
 
 ### 2b. Fix inheritance
 
 | Old | New |
 |---|---|
-| `is SepoliaZamaFHEVMConfig, SepoliaZamaGatewayConfig, GatewayCaller` | `is ZamaEthereumConfig` |
-| `is SepoliaZamaFHEVMConfig` | `is ZamaEthereumConfig` |
-| `is SepoliaConfig` | `is ZamaEthereumConfig` ← if importing from @fhevm/solidity |
+| `is SepoliaZamaFHEVMConfig, SepoliaZamaGatewayConfig, GatewayCaller` | `is SepoliaConfig` |
+| `is SepoliaZamaFHEVMConfig` | `is SepoliaConfig` |
+
+For Ethereum mainnet contracts substitute `ZamaEthereumConfig` for `SepoliaConfig`.
 
 Keep all other inheritance (AccessControl, ReentrancyGuard, Pausable) unchanged.
 
@@ -64,7 +67,7 @@ Apply globally (replace_all):
 | `TFHE.lt(` | `FHE.lt(` |
 | `TFHE.lte(` | `FHE.lte(` |
 | `TFHE.gt(` | `FHE.gt(` |
-| `TFHE.gte(` | `FHE.gte(` |
+| `TFHE.gte(a, b)` | `FHE.not(FHE.lt(a, b))` ⚠️ no `FHE.gte` in v0.11 — see 2f |
 | `TFHE.and(` | `FHE.and(` |
 | `TFHE.or(` | `FHE.or(` |
 | `TFHE.not(` | `FHE.not(` |
@@ -98,9 +101,11 @@ function deposit(bytes32 inputHandle, bytes calldata inputProof) external {
 
 Also replace `einput` type with `bytes32` wherever it appears as a parameter type.
 
-### 2e. Fix Gateway decryption → FHE.requestDecryption
+### 2e. Decryption: convert Gateway oracle callbacks → Pattern 3 (makePubliclyDecryptable)
 
-Old pattern:
+> ⚠️ **`FHE.requestDecryption` does NOT exist in `@fhevm/solidity@0.11.x`.** The only on-chain public-decrypt path is Pattern 3: `FHE.makePubliclyDecryptable(handle)` on-chain → off-chain relayer `publicDecrypt` → on-chain `verifyReveal(handles, cleartexts, proof)` with `FHE.checkSignatures(handlesList, cleartexts, proof)` plus **handle pinning**.
+
+Old Gateway pattern:
 ```solidity
 uint256[] memory cts = new uint256[](1);
 cts[0] = Gateway.toUint256(encValue);
@@ -111,27 +116,49 @@ function callback(uint256 requestId, uint64 result) public onlyGateway {
 }
 ```
 
-New pattern:
+New Pattern 3 rewrite:
 ```solidity
-bytes32[] memory cts = new bytes32[](1);
-cts[0] = FHE.toBytes32(encValue);
-FHE.requestDecryption(cts, this.callback.selector);
+// Step 1 — flag the ciphertext as publicly decryptable
+function requestReveal() external {
+    FHE.makePubliclyDecryptable(encValue);
+    pendingReveal = true;
+}
 
-function callback(uint256 requestId, bytes memory cleartexts, bytes memory decryptionProof) external {
-    FHE.checkSignatures(requestId, cleartexts, decryptionProof);
+// Step 2 — caller submits handlesList + cleartexts + KMS proof
+function verifyReveal(
+    bytes32[] calldata handlesList,
+    bytes calldata cleartexts,
+    bytes calldata decryptionProof
+) external {
+    require(pendingReveal, "no pending reveal");
+
+    // 🔒 CRITICAL: pin every handle BEFORE checkSignatures.
+    // checkSignatures only proves "KMS signed these handles decrypt to these cleartexts" —
+    // it does NOT bind a handle to any contract slot. Without this require, an attacker
+    // can substitute any KMS-signed handle (e.g. a publicly-decryptable euint64(0))
+    // to forge the result.
+    require(handlesList.length == 1, "bad handles length");
+    require(handlesList[0] == FHE.toBytes32(encValue), "handle mismatch");
+
+    FHE.checkSignatures(handlesList, cleartexts, decryptionProof);
     (uint64 result) = abi.decode(cleartexts, (uint64));
     revealedValue = result;
+    pendingReveal = false;
 }
 ```
 
-Remove `onlyGateway` modifier. Update `cts` type from `uint256[]` to `bytes32[]`.
+Remove `onlyGateway` modifier. Replace `cts` array (old `uint256[]`) and `Gateway.toUint256` plumbing with `FHE.makePubliclyDecryptable`.
 
-### 2f. Flag FHE.gte usage
+### 2f. Replace FHE.gte usage
 
-If old code used `TFHE.gte(a, b)` → replace with `FHE.not(FHE.lt(b, a))` and add comment:
+`FHE.gte` is **not** present in `@fhevm/solidity@0.11.x`. Rewrite as:
+
 ```solidity
-// ⚠️ FHE.gte not available in v0.11 — using not(lt(b,a)) equivalent
-FHE.not(FHE.lt(b, a))
+// gte(a, b)  →  not(lt(a, b))
+ebool isGte = FHE.not(FHE.lt(a, b));
+
+// Floor-at-zero subtraction (canonical form)
+euint64 result = FHE.select(FHE.not(FHE.lt(a, b)), FHE.sub(a, b), FHE.asEuint64(0));
 ```
 
 ---
@@ -156,12 +183,15 @@ const { vars } = require("hardhat/config");
 
 | Old | New |
 |---|---|
-| `import { createInstance } from "fhevmjs"` | `import { initSDK, createInstance, SepoliaConfig } from "@zama-fhe/relayer-sdk/web.js"` |
-| `import { initFhevm } from "@zama-fhe/relayer-sdk/web.js"` | (remove — initFhevm removed) |
+| `import { createInstance } from "fhevmjs"` | `import { initSDK, createInstance, SepoliaConfig } from "@zama-fhe/relayer-sdk/web";` |
+| `import { initFhevm } from "@zama-fhe/relayer-sdk/web";` | (remove — `initFhevm` removed in v0.4.x) |
+| `import { initSDK, createInstance, SepoliaConfig } from "@zama-fhe/relayer-sdk/web.js";` | drop the trailing `.js` — use the `/web` subpath: `from "@zama-fhe/relayer-sdk/web"` |
+| `import { ... } from "@zama-fhe/relayer-sdk/bundle";` | use `/web` for Vite/Next.js. The `/bundle` UMD entry is for plain `<script>` tags only and breaks ESM module loaders |
 | `await initFhevm()` | `await initSDK()` |
 | `createInstance({ network: window.ethereum, ...hardcodedAddresses })` | `createInstance({ ...SepoliaConfig, network: window.ethereum, relayerUrl: \`\${window.location.origin}/api/zama-relay\` })` |
-| `fhevmInstance.encrypt32(value)` | `fhevmInstance.encryptUint({ value: BigInt(value), type: "euint32", contractAddress, callerAddress })` |
-| `fhevmInstance.encrypt64(value)` | `fhevmInstance.encryptUint({ value: BigInt(value), type: "euint64", contractAddress, callerAddress })` |
+| `fhevmInstance.encryptUint({ value, type, contractAddress, callerAddress })` | `await fhevmInstance.createEncryptedInput(contractAddress, callerAddress).add64(BigInt(value)).encrypt()` (use `.add8/.add16/.add32/.add64/.addBool` per type — `encryptUint` was removed in `@zama-fhe/relayer-sdk@0.4.1`) |
+| `fhevmInstance.encrypt32(value)` | same `createEncryptedInput().add32(BigInt(value)).encrypt()` builder |
+| `fhevmInstance.encrypt64(value)` | same `createEncryptedInput().add64(BigInt(value)).encrypt()` builder |
 | `const { handle, proof } = ...` | `const handle = ethers.hexlify(encrypted.handles[0]); const proof = ethers.hexlify(encrypted.inputProof);` |
 
 ---
@@ -179,21 +209,22 @@ Files modified:
   contracts/MyContract.sol
     • 12 TFHE.* → FHE.* replacements
     • Import: removed GatewayCaller, SepoliaZamaFHEVMConfig
-    • Import: added FHE, ZamaEthereumConfig
-    • Inheritance: SepoliaZamaFHEVMConfig → ZamaEthereumConfig
-    • Gateway callback → FHE.requestDecryption pattern
+    • Import: added FHE, SepoliaConfig (npm)
+    • Inheritance: SepoliaZamaFHEVMConfig → SepoliaConfig
+    • Gateway callback → Pattern 3 (makePubliclyDecryptable + verifyReveal with handle pinning)
     • 2 einput params → bytes32 inputHandle
+    • FHE.gte → FHE.not(FHE.lt(...))
 
   hardhat.config.ts
     • process.env → vars.get()
 
   frontend/src/App.tsx
     • initFhevm → initSDK
-    • fhevmjs → @zama-fhe/relayer-sdk/web.js
+    • fhevmjs → @zama-fhe/relayer-sdk/web
+    • encryptUint → createEncryptedInput().addNN().encrypt()
     • Added relayerUrl proxy override
 
 Manual steps still needed:
-  □ Copy ZamaConfig.sol to contracts/ (from node_modules/@fhevm/solidity/config/ZamaConfig.sol)
   □ npx hardhat vars set MNEMONIC
   □ npx hardhat vars set INFURA_API_KEY
   □ Add /api/zama-relay.js CORS proxy (see 05-frontend.md)

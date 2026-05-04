@@ -51,8 +51,8 @@ Severity levels: `[CRITICAL]` (security hole), `[HIGH]` (broken functionality), 
 
 ### C. Decryption pattern checks (04-decryption)
 
-- [ ] **C1** `FHE.requestDecryption` callback signature is `(uint256 requestId, bytes memory cleartexts, bytes memory proof)` — if wrong: `[HIGH]`
-- [ ] **C2** Pattern 3 `verifyReveal` uses array form `FHE.checkSignatures(bytes32[], bytes, bytes)` not requestId form — if mixed: `[HIGH]`
+- [ ] **C1** No `FHE.requestDecryption` usage anywhere — function is **not present** in `@fhevm/solidity@0.11.x`. Use Pattern 3 (`FHE.makePubliclyDecryptable` + verifyReveal). If found: `[CRITICAL]` won't compile
+- [ ] **C2** Pattern 3 `verifyReveal` uses array form `FHE.checkSignatures(bytes32[], bytes, bytes)` — only form available in this stack — if missing: `[HIGH]`
 - [ ] **C3** `pendingReveal` mapping is deleted after `verifyReveal` — if not: `[MEDIUM]` replay attack
 - [ ] **C4** `abi.decode` type matches the encrypted type (bool for ebool, uint64 for euint64) — if mismatch: `[HIGH]` silent wrong values
 
