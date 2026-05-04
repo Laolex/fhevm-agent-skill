@@ -119,6 +119,20 @@ The `SKILL.md` entry point acts as a router: it reads the user's intent and load
 | GitHub Copilot | Compatible | Add as workspace context |
 | Any MCP-capable agent | Compatible | Serve modules as MCP resources |
 
+## Compatibility matrix
+
+| Layer | Pinned | Notes |
+|---|---|---|
+| `@fhevm/solidity` | `^0.11.1` | `FHE.*` API; no `requestDecryption`, no `gte` (use Pattern 3 + `not(lt)`) |
+| `@fhevm/hardhat-plugin` | `^0.4.x` | mock coprocessor |
+| `@zama-fhe/relayer-sdk` | `^0.4.1` | import from `@zama-fhe/relayer-sdk/web` only |
+| Solidity | `0.8.24` / `0.8.27` | `evmVersion: cancun` |
+| Network | Sepolia | npm `SepoliaConfig` — do not vendor local copy |
+
+**Banned (deprecated or absent in pinned stack):** `TFHE.*`, `einput`, `GatewayCaller`, `FHE.requestDecryption`, `FHE.gte`, `encryptUint`, `encrypt32/64`, `initFhevm`, `/web.js`, `/bundle` (Vite/Next), auto `hardhat verify`, local `ZamaConfig.sol`.
+
+**AI tools:** Claude Code · Cursor · Windsurf · GitHub Copilot · any MCP agent.
+
 ## Tech coverage
 
 - `@fhevm/solidity` v0.11+

@@ -14,6 +14,35 @@ description: >
 
 # fhEVM Agent Skill
 
+## Compatibility matrix (canonical stack)
+
+| Layer | Pinned version | Notes |
+|---|---|---|
+| `@fhevm/solidity` | `^0.11.1` | `FHE.*` API. **No** `FHE.requestDecryption`, **no** `FHE.gte` — use Pattern 3 + `FHE.not(FHE.lt(...))` |
+| `@fhevm/hardhat-plugin` | `^0.4.x` | mock coprocessor for tests, `fhevm.initializeCLIApi()` |
+| `@zama-fhe/relayer-sdk` | `^0.4.1` | import from `@zama-fhe/relayer-sdk/web` (Vite/Next.js). `/web.js` and `/bundle` are wrong for ESM |
+| Solidity | `0.8.24` (proven) / `0.8.27` (works) | `evmVersion: "cancun"` |
+| Network | Sepolia (chainId 11155111) | `SepoliaConfig` from npm — do NOT vendor a local `ZamaConfig.sol` |
+
+**Supported APIs:**
+- Encryption: `createEncryptedInput(contract, caller).addNN(value).encrypt()` builder
+- Decryption: `userDecrypt` (Pattern 1, batch `HandleContractPair`), `makePubliclyDecryptable` + `checkSignatures(handlesList, ...)` with handle pinning (Pattern 3)
+- ACL: `allowThis`, `allow`, `allowTransient`, `allowPublic`, `makePubliclyDecryptable`
+- Frontend init: `initSDK()` then `createInstance({ ...SepoliaConfig, network, relayerUrl: <proxy> })`
+
+**Banned APIs (will not compile / will not load):**
+- `TFHE.*` (any), `einput`, `GatewayCaller`, `Gateway.requestDecryption`, `onlyGateway`
+- `FHE.requestDecryption`, `FHE.gte` — not present in `@fhevm/solidity@0.11.x`
+- `fhevmInstance.encryptUint(...)`, `fhevmInstance.encrypt32/64(...)` — removed in `relayer-sdk@0.4.1`
+- `initFhevm` — removed; use `initSDK`
+- `@zama-fhe/relayer-sdk/web.js`, `@zama-fhe/relayer-sdk/bundle` (in Vite/Next.js)
+- `hardhat verify` auto-run on Etherscan (v2 API broken in `hardhat-verify ≤ 2.1.3`) — use manual `std_input.json` upload
+- Local-copy `ZamaConfig.sol`
+
+**AI tool compatibility:** Claude Code (native), Cursor, Windsurf, GitHub Copilot, any MCP-capable agent.
+
+---
+
 ## DISPATCH — execute immediately on load
 
 When this skill is invoked, check the args/command first and route accordingly:
