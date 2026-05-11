@@ -89,7 +89,7 @@ The agent will:
 4. Generate a deploy script
 5. Generate a React frontend snippet with `initSDK` + `userDecrypt`
 
-**Live demo** — [ConfidentialVote](https://github.com/Laolex/confidentialVote): a sealed-ballot polling contract built with this skill. Demonstrates all five FHE patterns: encrypted input + proof, blind tally accumulation, voter badge re-encryption, public reveal with handle pinning, and full ACL discipline.
+**Live demo** — [ConfidentialVote](https://github.com/Laolex/confidentialVote): a sealed-ballot polling contract built with this skill. Demonstrates all five FHE patterns: encrypted input + proof, blind tally accumulation, voter badge re-encryption, public reveal with handle pinning, and full ACL discipline. | [▶ Watch walkthrough](https://youtu.be/lcz6ejR8HyE)
 
 ## Architecture
 
