@@ -1,0 +1,11 @@
+{
+  "name": "fhevm",
+  "description": "Production-ready skill for Zama fhEVM confidential smart contracts. Scaffold, audit, and migrate encrypted contracts using @fhevm/solidity v0.11+ and @zama-fhe/relayer-sdk v0.4+. Commands: /fhevm:scaffold, /fhevm:audit, /fhevm:migrate.",
+  "version": "3.4.0",
+  "author": {
+    "name": "Laolex"
+  },
+  "homepage": "https://github.com/Laolex/fhevm-agent-skill",
+  "repository": "https://github.com/Laolex/fhevm-agent-skill",
+  "license": "MIT"
+}

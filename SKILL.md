@@ -49,9 +49,9 @@ When this skill is invoked, check the args/command first and route accordingly:
 
 | If args or user said… | Action |
 |-----------------------|--------|
-| `scaffold` / `/fhevm scaffold` / "generate a contract" / "build a new fhevm contract" | Read `~/.claude/skills/fhevm/scaffold.md` then execute that workflow |
-| `audit` / `/fhevm audit` / "audit this contract" / "review for ACL issues" | Read `~/.claude/skills/fhevm/audit.md` then execute that workflow |
-| `migrate` / `/fhevm migrate` / "migrate from TFHE" / "update to new FHE API" | Read `~/.claude/skills/fhevm/migrate.md` then execute that workflow |
+| `scaffold` / `/fhevm scaffold` / `/fhevm:scaffold` / "generate a contract" / "build a new fhevm contract" | Read `scaffold.md` from this skill's directory, then execute that workflow |
+| `audit` / `/fhevm audit` / `/fhevm:audit` / "audit this contract" / "review for ACL issues" | Read `audit.md` from this skill's directory, then execute that workflow |
+| `migrate` / `/fhevm migrate` / `/fhevm:migrate` / "migrate from TFHE" / "update to new FHE API" | Read `migrate.md` from this skill's directory, then execute that workflow |
 | No args / help / "what can you do" | Show the command menu below and wait for user |
 | Any other fhEVM task | Read relevant reference module(s) below, then proceed |
 

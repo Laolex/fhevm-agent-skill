@@ -52,12 +52,25 @@ Both deployed on Sepolia with full React/Vite frontends using `@zama-fhe/relayer
 
 ## Installation
 
-### Claude Code (recommended)
+### Claude Code — Plugin Marketplace (recommended)
 
-The skill is a directory of markdown files. Point your AI assistant's skill/context system at this repo:
+Install in one command from within Claude Code:
+
+```
+/plugin marketplace add https://github.com/Laolex/fhevm-agent-skill
+```
+
+Then from the **Discover** tab, find `fhevm` and install it. After installing, run `/reload-plugins` and use:
+
+```
+/fhevm:scaffold   — generate a full confidential contract project
+/fhevm:audit      — audit for ACL gaps and anti-patterns
+/fhevm:migrate    — rewrite TFHE.* code to the current FHE.* API
+```
+
+### Claude Code — Manual (git clone)
 
 ```bash
-# Clone into your Claude Code skills directory
 git clone https://github.com/Laolex/fhevm-agent-skill.git ~/.claude/skills/fhevm
 ```
 
