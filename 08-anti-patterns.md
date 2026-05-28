@@ -537,3 +537,114 @@ for (uint256 i = 0; i < n; i++) {
 }
 ```
 **Single-handle decode (`abi.decode(cleartexts, (uint64))`, `(bool)`, `(address)`) is fine** because one word matches one tuple element exactly. The bug only manifests when N ≥ 2 handles are decrypted in one call. The frontend MUST pass `result.abiEncodedClearValues` verbatim — re-encoding the values yourself invalidates the KMS signature (selector `0x6475522d` = `InvalidKMSSignatures`).
+
+---
+
+## ❌ New SDK — wrong import path for Node.js vs browser
+
+```ts
+// ❌ WRONG for Node.js — RelayerWeb requires browser APIs (WebWorker, IndexedDB)
+import { RelayerWeb } from "@zama-fhe/sdk";
+// running in Node.js will throw or silently hang
+
+// ✅ CORRECT for Node.js scripts / backend
+import { RelayerNode, asyncLocalStorage } from "@zama-fhe/sdk/node";
+
+// ✅ CORRECT for browser / React
+import { RelayerWeb, indexedDBStorage } from "@zama-fhe/sdk";
+```
+
+## ❌ New SDK — creating ZamaProvider outside QueryClientProvider
+
+```tsx
+// ❌ WRONG — ZamaProvider hooks are built on TanStack Query; no QueryClient = runtime crash
+<ZamaProvider relayer={relayer} signer={signer} storage={indexedDBStorage}>
+  {children}
+</ZamaProvider>
+
+// ✅ CORRECT — QueryClientProvider wraps ZamaProvider
+<QueryClientProvider client={queryClient}>
+  <ZamaProvider relayer={relayer} signer={signer} storage={indexedDBStorage}>
+    {children}
+  </ZamaProvider>
+</QueryClientProvider>
+```
+
+## ❌ New SDK — creating relayer/signer at module level in Next.js Server Component
+
+```ts
+// ❌ WRONG — runs during SSR, no IndexedDB, no wagmi context, crashes silently
+// app/layout.tsx (Server Component)
+const signer = new WagmiSigner({ config });
+const relayer = new RelayerWeb({ ... });
+
+// ✅ CORRECT — keep all SDK objects inside a "use client" provider component
+// app/providers.tsx
+"use client";
+export function Providers({ children }) { ... all SDK setup here ... }
+```
+
+## ❌ New SDK — using `memoryStorage` in production (balance lost on page refresh)
+
+```ts
+// ❌ WRONG for production — keypair lost on every page reload
+import { memoryStorage } from "@zama-fhe/sdk";
+<ZamaProvider storage={memoryStorage}>
+
+// ✅ CORRECT for production browser apps
+import { indexedDBStorage } from "@zama-fhe/sdk";
+<ZamaProvider storage={indexedDBStorage}>
+
+// ✅ CORRECT for tests only
+<ZamaProvider storage={memoryStorage}>
+```
+
+## ❌ New SDK — installing with Node 20 (engines.node >= 22)
+
+```bash
+# ❌ WRONG — @zama-fhe/sdk@3.0.0 requires Node >= 22; silently fails or throws on import
+node --version  # v20.x.x
+
+# ✅ CORRECT — upgrade Node before installing the new SDK
+nvm use 22
+npm install @zama-fhe/sdk@^3.0.0
+```
+
+Note: The Hardhat toolchain (`@fhevm/hardhat-plugin`, `npx hardhat test`) still works on Node 20.
+Only the new SDK's runtime path requires Node 22+.
+
+## ❌ New SDK — catching errors without `matchZamaError`
+
+```ts
+// ❌ FRAGILE — assumes .message is human-readable; misses structured error data
+try {
+  await token.shield(1000n);
+} catch (e) {
+  setError(e.message);
+}
+
+// ✅ CORRECT — use matchZamaError for typed handling
+import { matchZamaError } from "@zama-fhe/sdk";
+try {
+  await token.shield(1000n);
+} catch (e) {
+  const msg = matchZamaError(e, {
+    SIGNING_REJECTED: () => "Approve in your wallet",
+    INSUFFICIENT_ERC20_BALANCE: (err) => `Need more tokens: have ${err.available}`,
+    _: (err) => `Error: ${err.message}`,
+  });
+  setError(msg ?? e.message);
+}
+```
+
+## ❌ New SDK — using `useToken` hook without wrapping in ZamaProvider
+
+```tsx
+// ❌ WRONG — useToken throws "No ZamaProvider found in tree"
+function MyComponent() {
+  const token = useToken({ tokenAddress: "0x..." }); // crash
+}
+
+// ✅ CORRECT — ensure ZamaProvider is an ancestor of every hook caller
+// (See ZamaProvider setup in 09-new-sdk.md)
+```

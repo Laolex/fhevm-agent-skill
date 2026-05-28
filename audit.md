@@ -72,6 +72,24 @@ Severity levels: `[CRITICAL]` (security hole), `[HIGH]` (broken functionality), 
 - [ ] **E1** `VITE_*` env vars use `.trim()` when consumed — if not: `[MEDIUM]` trailing newline causes ENS errors
 - [ ] **E2** No `process.env.PRIVATE_KEY` in hardhat.config — use `vars.get()` — if yes: `[LOW]` key in env
 - [ ] **E3** Etherscan verification: if using `hardhat verify` plugin, note that Etherscan v2 API is broken — recommend manual std_input.json — `[LOW]` informational
+- [ ] **E4** If `@zama-fhe/sdk@^3` and Hardhat toolchain are in the same `package.json`: confirm `"overrides": { "@zama-fhe/relayer-sdk": "0.4.1" }` is present — if not: `[HIGH]` Hardhat will abort at startup with version mismatch error
+
+### F. New SDK checks (09-new-sdk — only run if project uses `@zama-fhe/sdk@^3` or `@zama-fhe/react-sdk@^3`)
+
+- [ ] **F1** `ZamaProvider` is wrapped by `QueryClientProvider` — if not: `[CRITICAL]` runtime crash, all hooks throw
+- [ ] **F2** All files importing from `@zama-fhe/react-sdk` have `"use client"` (Next.js App Router) — if not: `[HIGH]` SSR crash; IndexedDB/WebWorker unavailable during SSR
+- [ ] **F3** `RelayerWeb` is used in browser context, `RelayerNode` in Node.js context — if mixed: `[HIGH]` silent hang or crash
+- [ ] **F4** `indexedDBStorage` used in production (not `memoryStorage`) — if memoryStorage in prod: `[MEDIUM]` keypair lost on page refresh, users must re-approve every session
+- [ ] **F5** Node.js runtime version is >= 22 if using new SDK — if Node 20: `[HIGH]` new SDK silently fails on import
+- [ ] **F6** SDK objects (`relayer`, `signer`) are NOT created at module level in Server Components — if yes: `[HIGH]` SSR crash in Next.js
+- [ ] **F7** Error handling uses `matchZamaError` — if catching raw Error with `.message` only: `[LOW]` loses structured error data (`.requested`, `.available`, etc.)
+
+### G. HCU budget checks (10-hcu-costs — run for complex contracts)
+
+- [ ] **G1** Any function with > 5 FHE operations on `euint64`: estimate total HCU (see 10-hcu-costs.md) — if > 5M: `[HIGH]` may hit depth limit
+- [ ] **G2** Any use of `FHE.mul(euint64, euint64)` (596K HCU each) in a loop or combined with many other ops: flag total — if > 20M: `[CRITICAL]` tx reverts
+- [ ] **G3** Any use of `FHE.rem(euint64, ...)` (~1.2M HCU): flag and recommend bitmasking alternative for power-of-2 moduli — `[MEDIUM]`
+- [ ] **G4** Any use of `FHE.div(euint64, ...)` (~700K HCU): confirm plaintext divisor; recommend `FHE.shr` for power-of-2 divisors — `[LOW]` optimization
 
 ---
 
@@ -113,3 +131,5 @@ Total: X critical, Y high, Z medium, W low
 
 After the report, ask: "Apply all fixes automatically? (yes/no)"
 If yes: apply every fix in-place using Edit tool, then confirm each change.
+
+Note: Sections F and G are conditional — only run F if the project uses `@zama-fhe/sdk@^3` or `@zama-fhe/react-sdk@^3`, and G for any contract with complex FHE logic. Skip inapplicable sections and mark them as N/A in the passed checks list.

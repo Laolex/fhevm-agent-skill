@@ -8,13 +8,41 @@ type: reference
 
 ## Install dependencies
 ```bash
-# Hardhat project
-npm install @fhevm/solidity @fhevm/hardhat-plugin
-npm install --save-dev hardhat @nomicfoundation/hardhat-ethers
+# Hardhat project (contracts + tests)
+npm install @fhevm/solidity @fhevm/hardhat-plugin @fhevm/mock-utils
+npm install --save-dev hardhat @nomicfoundation/hardhat-ethers @nomicfoundation/hardhat-chai-matchers
+# Toolchain requires @zama-fhe/relayer-sdk at EXACTLY 0.4.1 — pin via overrides if needed
+npm install @zama-fhe/relayer-sdk@0.4.1
 
-# Frontend
-npm install @zama-fhe/relayer-sdk
+# Frontend — legacy SDK (custom contracts, raw encrypted inputs)
+npm install @zama-fhe/relayer-sdk@0.4.1
+
+# Frontend — new SDK (ERC-7984 dApps, React)
+npm install @zama-fhe/sdk@^3.0.0                    # vanilla TS / Node.js (requires Node >= 22)
+npm install @zama-fhe/react-sdk@^3.0.0@tanstack/react-query@^5  # React
 ```
+
+### Dependency Conflict: `relayer-sdk` 0.4.1 Pin
+
+If you install both the Hardhat toolchain and `@zama-fhe/sdk@^3` in the **same** `package.json`,
+npm can hoist `relayer-sdk` to `0.4.2+` and Hardhat aborts:
+
+```
+Error in plugin @fhevm/hardhat-plugin: Invalid @zama-fhe/relayer-sdk version.
+Expecting 0.4.1. Got 0.4.2 instead.
+```
+
+**Fix (single-package):** add to `package.json`:
+```json
+{
+  "overrides": { "@zama-fhe/relayer-sdk": "0.4.1" }
+}
+```
+Then `rm -rf node_modules package-lock.json && npm install`.
+
+**Fix (monorepo, recommended):** Keep the Hardhat package and the React/dApp frontend in
+separate workspace packages. The contracts workspace pins `0.4.1`; the frontend workspace
+installs whatever `@zama-fhe/sdk` needs. See `09-new-sdk.md` for full details.
 
 ## hardhat.config.ts
 ```typescript
@@ -29,7 +57,7 @@ const { vars } = require("hardhat/config");
 
 const config: HardhatUserConfig = {
   solidity: {
-    version: "0.8.24",   // ✅ 0.8.24 is proven on Sepolia fhEVM; 0.8.27 also works
+    version: "0.8.28",   // ✅ 0.8.28 is the new default; 0.8.24 is the minimum proven on Sepolia
     settings: {
       optimizer: { enabled: true, runs: 200 },
       evmVersion: "cancun",
