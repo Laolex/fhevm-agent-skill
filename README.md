@@ -1,5 +1,19 @@
 # fhEVM Agent Skill
 
+<p align="center">
+  <img src="https://img.shields.io/badge/AI_Agent_Skill-7aa2f7?style=for-the-badge" alt="category"/>
+  <img src="https://img.shields.io/badge/Claude_·_Cursor_·_Windsurf-D97757?style=for-the-badge" alt="validated on"/>
+  <img src="https://img.shields.io/badge/License-MIT-bb9af7?style=for-the-badge" alt="MIT"/>
+</p>
+
+<p align="center">
+  <img src="https://img.shields.io/badge/Prompt_Engineering-412991?style=flat-square&logo=openai&logoColor=white"/>
+  <img src="https://img.shields.io/badge/Agent_Design-1C3C3C?style=flat-square&logo=langchain&logoColor=white"/>
+  <img src="https://img.shields.io/badge/Solidity-363636?style=flat-square&logo=solidity&logoColor=white"/>
+  <img src="https://img.shields.io/badge/fhEVM_(Zama)-FFD200?style=flat-square&logoColor=black"/>
+</p>
+
+
 **Production-ready AI agent skill that enables any LLM-powered coding assistant to write, audit, and migrate Zama fhEVM confidential smart contracts.**
 
 Built for the [Zama Bounty Program Season 2](https://github.com/zama-ai/bounty-program) — Bounty Track.
